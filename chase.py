@@ -16,9 +16,8 @@ class World(BaseWorld):
         """ Set up the world """
         BaseWorld.__init__(self, lifespan)
         self.CLOCKS_PER_LOOP = int(1000. / 4.)
-        #self.CLOCKS_PER_LOOP = 1
-        #self.CLOCKS_PER_FRAME = int(1000. / 30.)
         self.TIMESTEPS_PER_FRAME = 100
+        self.CLOCKS_PER_FRAME = 33.
         self.name = 'chase'
         self.name_long = 'ball chasing world'
         print "Entering", self.name_long
@@ -26,6 +25,8 @@ class World(BaseWorld):
         self.num_sensors = self.n_bump + self.n_range + self.n_heading
         self.num_actions = 18
         self.action = np.zeros((self.num_actions,1))
+        self.CATCH_REWARD = 100.
+        self.bump_penalty = True
         self.name = 'chase_world'
         print "Entering", self.name
         self.world_directory = 'becca_world_chase_ball'
@@ -82,6 +83,7 @@ class World(BaseWorld):
         self.n_range = 7 
         self.range = np.zeros(self.n_range)
         self.range_bins = self.r_bot * np.array([-1., .1, .2, .4, .8, 1.6, 3.2])
+        self.n_catch = 0.
 
         # create a prototype force profile
         # It is a triangular profile, ramping linearly from 0 to peak over its
@@ -143,15 +145,10 @@ class World(BaseWorld):
 
         def calculate_reward():
             """ Assign reward based on the current state """
-            self.reward = 0.
-            i_rewarded_heading = [0, -1]
-            for i in i_rewarded_heading:
-                if self.heading[i] > 0.:
-                    self.reward += self.heading[i] * self.range[0]
-            self.reward -= np.sum(self.bump)
-            #if self.reward > 0.:
-                #print self.reward
-            #print  self.heading[0], self.heading[-1], self.range[0]
+            self.reward = self.n_catch * self.CATCH_REWARD
+            if self.bump_penalty:
+                self.reward -= np.sum(self.bump)
+            self.n_catch = 0.
             return 
         
         def convert_detectors_to_sensors():
@@ -178,6 +175,7 @@ class World(BaseWorld):
         
         def sector_index(n_sectors, theta):
             """ For sector-based detectors, find the sector based on angle """
+            theta = np.mod(theta, 2 * np.pi)
             return int(np.floor(n_sectors * theta / (2 * np.pi)))
 
         # add new force profiles to the buffers
@@ -234,7 +232,7 @@ class World(BaseWorld):
         if delta_bot_ball > 0.:
             i_bump = sector_index(self.n_bump, th_bot_ball_rel)
             self.bump[i_bump] += delta_bot_ball 
-        
+
         # calculate the forces on the ball
         # wall contact
         delta_ball_N = self.y_ball + self.r_ball - self.depth
@@ -328,18 +326,39 @@ class World(BaseWorld):
         self.th_bot += self.omega_bot * self.dt
         self.th_bot = np.mod(self.th_bot, 2 * np.pi)
 
+        # check whether the bot caught the ball
+        caught = False
+        if i_range == 0:
+            if ((i_heading == 0) | (i_heading == self.n_heading - 1)):
+                caught = True
+        if caught:
+            self.n_catch += 1.
+            # when caught, the ball jumps to a new location
+            good_location = False
+            while not good_location:
+                self.x_ball = self.r_ball + np.random.random_sample() * (
+                        self.width - 2 * self.r_ball)
+                self.y_ball = self.r_ball + np.random.random_sample() * (
+                        self.depth - 2 * self.r_ball)
+                self.vx_ball = np.random.normal()
+                self.vy_ball = np.random.normal()
+                # check that the ball doesn't splinch the robot
+                delta_bot_ball = (self.r_ball + self.r_bot -
+                                  ((self.x_ball - self.x_bot) ** 2 + 
+                                   (self.y_ball - self.y_bot) ** 2) ** .5) 
+                if delta_bot_ball < 0.:
+                    good_location = True
+                    
+        if (self.clock_tick % self.CLOCKS_PER_FRAME) == 0:
+            self.render()
         #print
         #print 'bump', self.bump.ravel()
         #print 'range', self.range.ravel()
         #print 'heading', self.heading.ravel()
         return
-        
-    def visualize(self, agent=None):
-        """ Show what's going on in the world """
-        if (self.timestep % self.TIMESTEPS_PER_FRAME) != 0:
-            return
-        print("world is %s seconds old " % self.clock_time)
-
+    
+    def render(self): 
+    
         fig = plt.figure(num=83)
         fig.clf()
         fig, ax = plt.subplots(num=83, figsize=(self.width, self.depth))
@@ -415,4 +434,13 @@ class World(BaseWorld):
         plt.savefig(full_filename, format='png', dpi=dpi, 
                     facecolor=fig.get_facecolor(), edgecolor='none') 
         #plt.show()
+        return
+
+    def visualize(self, agent=None):
+        """ Show what's going on in the world """
+        if (self.timestep % self.TIMESTEPS_PER_FRAME) != 0:
+            return
+        print("world is %s seconds old " % self.clock_time)
+        
+        self.render()
         return
