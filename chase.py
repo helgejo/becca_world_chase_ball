@@ -15,26 +15,35 @@ class World(BaseWorld):
     def __init__(self, lifespan=None):
         """ Set up the world """
         BaseWorld.__init__(self, lifespan)
-        self.CLOCKS_PER_LOOP = int(1000. / 4.)
+        self.CLOCKTICKS_PER_TIMESTEP = int(1000. / 4.)
         self.TIMESTEPS_PER_FRAME = 100
-        self.CLOCKS_PER_FRAME = 33.
+        self.CLOCKTICKS_PER_FRAME = (self.CLOCKTICKS_PER_TIMESTEP * 
+                                     self.TIMESTEPS_PER_FRAME)
         self.name = 'chase'
+        #self.name = 'chase_no_bump'
+        #self.name = 'chase_no_bump_large'
+        #self.name = 'chase_small'
+        #self.bump_penalty = True
+        self.small = False
         self.name_long = 'ball chasing world'
         print "Entering", self.name_long
         self._initialize_world()
-        self.num_sensors = self.n_bump + self.n_range + self.n_heading
-        self.num_actions = 18
+        #self.num_sensors = (self.n_bump + self.n_range + self.n_heading +
+        #                    self.n_bump * self.n_range)
+        self.num_sensors = (self.n_range * self.n_heading)
+        #self.num_sensors = (self.n_bump + self.n_range * self.n_heading +
+        #                    self.n_bump * self.n_range)
+        self.num_actions = 16
         self.action = np.zeros((self.num_actions,1))
-        self.CATCH_REWARD = 100.
-        self.bump_penalty = True
-        self.name = 'chase_world'
-        print "Entering", self.name
+        self.CATCH_REWARD = .8
+        self.SEE_REWARD = .01
+        self.RANGE_REWARD = .002
+        self.BUMP_PENALTY = 0.#.01
+        self.state_history = []
         self.world_directory = 'becca_world_chase_ball'
         self.log_directory = os.path.join(self.world_directory, 'log')
         self.frames_directory = os.path.join(self.world_directory, 'frames') 
         self.frame_counter = 10000
-        self.frames_per_step = 1
-        self.frames_per_sec = 30.
 
     def _initialize_world(self):
         self.clock_tick = 0.
@@ -76,14 +85,28 @@ class World(BaseWorld):
         self.alpha_bot = 0. # radians / second**2
 
         # detector parameters
-        self.n_bump = 12
+        if self.small:
+            self.n_bump = 6
+        else:
+            self.n_bump = 12
         self.bump = np.zeros(self.n_bump)
         self.n_heading = 12
-        self.heading = np.zeros(self.n_heading)
-        self.n_range = 7 
-        self.range = np.zeros(self.n_range)
-        self.range_bins = self.r_bot * np.array([-1., .1, .2, .4, .8, 1.6, 3.2])
+        #self.heading = np.zeros(self.n_heading)
+        if self.small:
+            self.n_range = 3 
+            self.range_bins = self.r_bot * np.array([-1., .2, .8])
+        else:
+            self.n_range = 7 
+            self.range_bins = self.r_bot * np.array([
+                    -1., .1, .2, .4, .8, 1.6, 3.2])
+        #self.range = np.zeros(self.n_range)
+        self.vision = np.zeros((self.n_heading, self.n_range))
+        self.vision_bins = np.copy(self.range_bins)
+        self.prox = np.zeros((self.n_bump, self.n_range))
+        self.prox_bins = np.copy(self.range_bins)
         self.n_catch = 0.
+        self.n_see = 0.
+        self.n_reach = 0.
 
         # create a prototype force profile
         # It is a triangular profile, ramping linearly from 0 to peak over its
@@ -120,53 +143,88 @@ class World(BaseWorld):
             #        self.action[index] = 1.
                     
             #print 'action', self.action.ravel()
-            self.timestep += 1 
             # Find the drive magnitude
-            self.drive = (
-                     self.action[0] + 
-                 2 * self.action[1] + 
-                 3 * self.action[2] + 
-                 4 * self.action[3] - 
-                     self.action[4] - 
-                 2 * self.action[5] - 
-                 3 * self.action[6] - 
-                 4 * self.action[7])
+            self.drive = (  self.action[0] + 
+                        2 * self.action[1] + 
+                        3 * self.action[2] + 
+                        4 * self.action[3] - 
+                            self.action[4] - 
+                        2 * self.action[5] - 
+                        3 * self.action[6] - 
+                        4 * self.action[7])
             # Find the spin magnitude
-            self.spin = (
-                    self.action[8] + 
-                2 * self.action[9] + 
-                3 * self.action[10] + 
-                4 * self.action[11] - 
-                    self.action[12] - 
-                2 * self.action[13] - 
-                3 * self.action[14] - 
-                4 * self.action[15])
-            return
+            self.spin = (   self.action[8]  + 
+                        2 * self.action[9]  + 
+                        3 * self.action[10] + 
+                        4 * self.action[11] - 
+                            self.action[12] - 
+                        2 * self.action[13] - 
+                        3 * self.action[14] - 
+                        4 * self.action[15])
 
         def calculate_reward():
             """ Assign reward based on the current state """
-            self.reward = self.n_catch * self.CATCH_REWARD
-            if self.bump_penalty:
-                self.reward -= np.sum(self.bump)
+            self.reward = 0.
+            #if self.n_catch: print 'catch', self.n_catch
+            #if self.n_see: print 'see', self.n_see
+            #if self.n_reach: print 'reach', self.n_reach
+            if self.n_catch:
+                self.reward += self.CATCH_REWARD
+                print 'caught one!========================================'
+            if self.n_see:
+                self.reward += self.SEE_REWARD
+            if self.n_reach:
+                self.reward += self.n_reach * self.RANGE_REWARD
+            if np.sum(self.bump) > 0.:
+                #bump_penalty:
+                self.reward -= self.BUMP_PENALTY
+                #self.reward -= np.sum(self.bump)
             self.n_catch = 0.
-            return 
+            self.n_see = 0.
+            self.n_reach = 0.
         
         def convert_detectors_to_sensors():
             self.sensors = np.zeros(self.num_sensors)
-            self.sensors[:self.n_bump] = self.bump
+            last = 0
+            #first = last
+            #last = first + self.n_bump
+            #self.sensors[first:last] = self.bump
+            '''
             self.sensors[self.n_bump:self.n_bump + self.n_range] = self.range
             self.sensors[self.n_bump + self.n_range:
                     self.n_bump + self.n_range + self.n_heading] = self.heading
+            self.sensors[self.n_bump + self.n_range + self.n_heading:
+                    self.n_bump + self.n_range + self.n_heading + 
+                    self.n_bump * self.n_range] = self.prox.ravel()
+            '''
+            first = last
+            last = first + self.n_heading * self.n_range
+            self.sensors[first:last] = self.vision.ravel()
+
+            #first = last
+            #last = first + self.n_bump * self.n_range
+            #self.sensors[first:last] = self.prox.ravel()
+
+            #print 'bump', self.bump.ravel()
+            #print 'vision', self.vision.ravel()
+            #print 'prox', self.prox.ravel()
+
             self.bump = np.zeros(self.n_bump)
-            self.range = np.zeros(self.n_range)
-            self.heading = np.zeros(self.n_heading)
-            return
+            #self.range = np.zeros(self.n_range)
+            #self.heading = np.zeros(self.n_heading)
+            self.vision = np.zeros(self.vision.shape)
+            self.prox = np.zeros(self.prox.shape)
             
+        self.timestep += 1 
         convert_actions_to_drives(action)
-        for _ in range(self.CLOCKS_PER_LOOP):
+        for _ in range(self.CLOCKTICKS_PER_TIMESTEP):
             self.clock_step()
         calculate_reward()
         convert_detectors_to_sensors()
+        full_state = np.concatenate((action.ravel(), 
+                                     self.sensors.ravel(), 
+                                     np.array([self.reward]) ))
+        self.state_history.append(full_state)
         return self.sensors, self.reward
 
     def clock_step(self):
@@ -177,6 +235,34 @@ class World(BaseWorld):
             """ For sector-based detectors, find the sector based on angle """
             theta = np.mod(theta, 2 * np.pi)
             return int(np.floor(n_sectors * theta / (2 * np.pi)))
+
+        def wall_range(theta):
+            range = 1e10
+            # find distance to West wall
+            range_west = self.x_bot / (np.cos(np.pi - theta) + 1e-6)
+            if range_west < 0.:
+                range_west = 1e10
+                range_west -= self.r_bot
+            range = np.minimum(range, range_west)
+            # find distance to East wall
+            range_east = (self.width - self.x_bot) / (np.cos(theta) + 1e-6) 
+            if range_east < 0.:
+                range_east = 1e10
+            range_east -= self.r_bot
+            range = np.minimum(range, range_east)
+            # find distance to South wall
+            range_south = self.y_bot / (np.sin(-theta) + 1e-6)
+            if range_south < 0.:
+                range_south = 1e10
+            range_south -= self.r_bot
+            range = np.minimum(range, range_south)
+            # find distance to North wall
+            range_north = (self.depth - self.y_bot) / (np.sin(theta) + 1e-6)
+            if range_north < 0.:
+                range_north = 1e10
+            range_north -= self.r_bot
+            range = np.minimum(range, range_north)
+            return range
 
         # add new force profiles to the buffers
         if np.abs(self.drive) > 0.:
@@ -208,7 +294,6 @@ class World(BaseWorld):
         self.f_y_buffer[buffer_index] = 0.
         self.tau_buffer[buffer_index] = 0.
 
-        #print 'x', f_x_drive, 'y', f_y_drive, 'th', tau_drive 
         # contact between the robot and the ball
         delta_bot_ball = (self.r_ball + self.r_bot -
                           ((self.x_ball - self.x_bot) ** 2 + 
@@ -221,17 +306,23 @@ class World(BaseWorld):
                       (self.k_bot + self.k_ball))
         # TODO: limit vision to field of view
         # ball range detection
-        i_range = np.where(dist_bot_ball > self.range_bins)[0][-1] 
-        self.range[i_range] += 1.
+        i_vision_range = np.where(dist_bot_ball > self.range_bins)[0][-1] 
+        #self.range[i_vision_range] += 1.
         # ball heading detection
         # the angle of contact relative to the robot's angle
         th_bot_ball_rel = np.mod(self.th_bot - th_bot_ball, 2. * np.pi)
-        i_heading = sector_index(self.n_heading, th_bot_ball_rel)
-        self.heading[i_heading] += 1. 
+        i_vision_heading = sector_index(self.n_heading, th_bot_ball_rel)
+        #self.heading[i_vision_heading] += 1. 
+        self.vision = np.zeros(self.vision.shape)
+        self.vision[i_vision_heading, i_vision_range] = 1.
+        
         # ball bump detection
+        # debug: don't penalize ball bumps
         if delta_bot_ball > 0.:
             i_bump = sector_index(self.n_bump, th_bot_ball_rel)
-            self.bump[i_bump] += delta_bot_ball 
+            #self.bump[i_bump] += delta_bot_ball 
+            self.bump[i_bump] += 0.
+            #print 'ball bump', i_bump, 
 
         # calculate the forces on the ball
         # wall contact
@@ -257,31 +348,46 @@ class World(BaseWorld):
         f_ball_vy = -self.vy_ball * self.c_ball
 
         # wall bump detection
-        # calculate the angle of contact relative to the robot's angle
+        # Calculate the angle of contact relative to the robot's angle
+        # for each of the walls. Assign the contact to the appropriate
+        # bump sensor.
         delta_bot_N = self.y_bot + self.r_bot - self.depth
         delta_bot_N = np.maximum(delta_bot_N, 0.)
         if delta_bot_N > 0.:
             th_bot_N_rel = np.mod(self.th_bot - np.pi / 2., 2. * np.pi)
             i_bump = sector_index(self.n_bump, th_bot_N_rel)
-            self.bump[i_bump] += delta_bot_N 
+            #self.bump[i_bump] += delta_bot_N 
+            self.bump[i_bump]  = 1.
         delta_bot_S = self.r_bot - self.y_bot
         delta_bot_S = np.maximum(delta_bot_S, 0.)
         if delta_bot_S > 0.:
             th_bot_S_rel = np.mod(self.th_bot + np.pi / 2., 2. * np.pi)
             i_bump = sector_index(self.n_bump, th_bot_S_rel)
-            self.bump[i_bump] += delta_bot_S
+            #self.bump[i_bump] += delta_bot_S
+            self.bump[i_bump]  = 1.
         delta_bot_E = self.x_bot + self.r_bot - self.width
         delta_bot_E = np.maximum(delta_bot_E, 0.)
         if delta_bot_E > 0.:
             th_bot_E_rel = np.mod(self.th_bot, 2. * np.pi)
             i_bump = sector_index(self.n_bump, th_bot_E_rel)
-            self.bump[i_bump] += delta_bot_E
+            #self.bump[i_bump] += delta_bot_E
+            self.bump[i_bump]  = 1.
         delta_bot_W = self.r_bot - self.x_bot
         delta_bot_W = np.maximum(delta_bot_W, 0.)
         if delta_bot_W > 0.:
             th_bot_W_rel = np.mod(self.th_bot + np.pi, 2. * np.pi)
             i_bump = sector_index(self.n_bump, th_bot_W_rel)
-            self.bump[i_bump] += delta_bot_W
+            #self.bump[i_bump] += delta_bot_W
+            self.bump[i_bump]  = 1.
+
+        # wall proximity detection
+        # calculate the range detected by each proximity sensor
+        for (i_prox, prox_theta) in enumerate(
+                    np.arange(0., 2 * np.pi, 2 * np.pi / self.n_bump)):
+            range = wall_range(prox_theta + self.th_bot)
+            i_prox_range = np.where(range > self.range_bins)[0][-1]
+            self.prox[i_prox, i_prox_range] = 1.
+
 
         # calculated the forces on the bot
         # wall contact
@@ -306,7 +412,7 @@ class World(BaseWorld):
         f_bot_y = f_bot_N_y + f_bot_S_y + f_bot_ball_y + f_bot_vy + f_y_drive
         tau_bot = tau_bot_omega + tau_drive
 
-        # use forces to update accerations, velocities, and positions
+        # use forces to update accelerations, velocities, and positions
         # ball
         self.ax_ball = f_ball_x / self.m_ball
         self.ay_ball = f_ball_y / self.m_ball
@@ -328,9 +434,13 @@ class World(BaseWorld):
 
         # check whether the bot caught the ball
         caught = False
-        if i_range == 0:
-            if ((i_heading == 0) | (i_heading == self.n_heading - 1)):
+        if ((i_vision_heading == 0) | (i_vision_heading == self.n_heading - 1)):
+            self.n_see = 1.
+            if i_vision_range == 0:
                 caught = True
+
+        self.n_reach = np.maximum(self.n_reach, float(6 - i_vision_range))
+
         if caught:
             self.n_catch += 1.
             # when caught, the ball jumps to a new location
@@ -349,12 +459,12 @@ class World(BaseWorld):
                 if delta_bot_ball < 0.:
                     good_location = True
                     
-        if (self.clock_tick % self.CLOCKS_PER_FRAME) == 0:
+        if (self.clock_tick % self.CLOCKTICKS_PER_FRAME) == 0:
+            #print
+            #print 'bump', self.bump.ravel()
+            #print 'vision', self.vision.ravel()
+            #print 'prox', self.prox.ravel()
             self.render()
-        #print
-        #print 'bump', self.bump.ravel()
-        #print 'range', self.range.ravel()
-        #print 'heading', self.heading.ravel()
         return
     
     def render(self): 
@@ -429,8 +539,8 @@ class World(BaseWorld):
         filename =  self.name + '_' + str(self.frame_counter) + '.png'
         full_filename = os.path.join(self.frames_directory, filename)
         self.frame_counter += 1
-        #dpi = 80 # for a resolution of 720 lines
-        dpi = 120 # for a resolution of 1080 lines
+        dpi = 80 # for a resolution of 720 lines
+        #dpi = 120 # for a resolution of 1080 lines
         plt.savefig(full_filename, format='png', dpi=dpi, 
                     facecolor=fig.get_facecolor(), edgecolor='none') 
         #plt.show()
@@ -441,6 +551,24 @@ class World(BaseWorld):
         if (self.timestep % self.TIMESTEPS_PER_FRAME) != 0:
             return
         print("world is %s seconds old " % self.clock_time)
-        
+        summary = np.sum(np.array(self.state_history), axis=0)
+        print '==='
+        first = 0
+        last = self.num_actions
+        print 'action', summary[first:last]
+        #first = last
+        #last = first + self.n_bump
+        #print 'bumps', summary[first:last]
+        first = last
+        last = first + self.n_heading * self.n_range
+        print 'vision', np.reshape(summary[first:last], 
+                                   (self.n_heading, self.n_range))
+        #first = last
+        #last = first + self.n_heading * self.n_range
+        #print 'proximity', np.reshape(summary[first:last], 
+        #                              (self.n_heading, self.n_range))
+
+        print 'reward', summary[-1]
+
         self.render()
         return
