@@ -16,8 +16,8 @@ class World(BaseWorld):
         """ Set up the world """
         BaseWorld.__init__(self, lifespan)
         self.CLOCKTICKS_PER_TIMESTEP = int(1000. / 4.)
-        self.TIMESTEPS_PER_FRAME = 100
-        self.CLOCKTICKS_PER_FRAME = (self.CLOCKTICKS_PER_TIMESTEP * 
+        self.TIMESTEPS_PER_FRAME = 100.#4. / 30.# 100. 
+        self.CLOCKTICKS_PER_FRAME = int(self.CLOCKTICKS_PER_TIMESTEP * 
                                      self.TIMESTEPS_PER_FRAME)
         self.name = 'chase'
         #self.name = 'chase_no_bump'
@@ -30,10 +30,12 @@ class World(BaseWorld):
         self._initialize_world()
         #self.num_sensors = (self.n_bump + self.n_range + self.n_heading +
         #                    self.n_bump * self.n_range)
-        self.num_sensors = (self.n_range * self.n_heading)
+        #self.num_sensors = (self.n_range * self.n_heading)
+        self.num_sensors = (self.n_range + self.n_heading)
         #self.num_sensors = (self.n_bump + self.n_range * self.n_heading +
         #                    self.n_bump * self.n_range)
         self.num_actions = 16
+        #self.num_actions = 12
         self.action = np.zeros((self.num_actions,1))
         self.CATCH_REWARD = .8
         self.SEE_REWARD = .01
@@ -71,7 +73,9 @@ class World(BaseWorld):
         self.r_bot = .8 # meters
         self.k_bot =  3000. # Newtons / meter
         self.c_bot = 10. # Newton-seconds / meter
+        self.cc_bot = 1. # Newton
         self.d_bot = 10. # Newton-meter-seconds / radian
+        self.dd_bot = 1. # Newton-meter
         self.m_bot = 5. # kilogram
         self.I_bot = 1. # kilogram-meters**2
         self.x_bot = 2. # meters
@@ -101,6 +105,8 @@ class World(BaseWorld):
                     -1., .1, .2, .4, .8, 1.6, 3.2])
         #self.range = np.zeros(self.n_range)
         self.vision = np.zeros((self.n_heading, self.n_range))
+        self.v_heading = np.zeros(self.n_heading)
+        self.v_range = np.zeros(self.n_range)
         self.vision_bins = np.copy(self.range_bins)
         self.prox = np.zeros((self.n_bump, self.n_range))
         self.prox_bins = np.copy(self.range_bins)
@@ -138,11 +144,21 @@ class World(BaseWorld):
 
         def convert_actions_to_drives(action):
             self.action = action
-            #for index in np.arange(self.action.size):
-            #    if np.random.random_sample() < .05:
-            #        self.action[index] = 1.
-                    
-            #print 'action', self.action.ravel()
+            '''# Find the drive magnitude
+            self.drive = (  self.action[0] + 
+                        2 * self.action[1] + 
+                        4 * self.action[2] - 
+                            self.action[3] - 
+                        2 * self.action[4] - 
+                        4 * self.action[5])
+            # Find the spin magnitude
+            self.spin = (   self.action[6]  + 
+                        2 * self.action[7]  + 
+                        4 * self.action[8] - 
+                            self.action[9] - 
+                        2 * self.action[10] - 
+                        4 * self.action[11])
+            '''
             # Find the drive magnitude
             self.drive = (  self.action[0] + 
                         2 * self.action[1] + 
@@ -165,12 +181,8 @@ class World(BaseWorld):
         def calculate_reward():
             """ Assign reward based on the current state """
             self.reward = 0.
-            #if self.n_catch: print 'catch', self.n_catch
-            #if self.n_see: print 'see', self.n_see
-            #if self.n_reach: print 'reach', self.n_reach
             if self.n_catch:
                 self.reward += self.CATCH_REWARD
-                print 'caught one!========================================'
             if self.n_see:
                 self.reward += self.SEE_REWARD
             if self.n_reach:
@@ -179,6 +191,7 @@ class World(BaseWorld):
                 #bump_penalty:
                 self.reward -= self.BUMP_PENALTY
                 #self.reward -= np.sum(self.bump)
+            print self.reward, 'catch', self.n_catch, 'see', self.n_see ,'reach', self.n_reach
             self.n_catch = 0.
             self.n_see = 0.
             self.n_reach = 0.
@@ -197,10 +210,16 @@ class World(BaseWorld):
                     self.n_bump + self.n_range + self.n_heading + 
                     self.n_bump * self.n_range] = self.prox.ravel()
             '''
-            first = last
-            last = first + self.n_heading * self.n_range
-            self.sensors[first:last] = self.vision.ravel()
+            #first = last
+            #last = first + self.n_heading * self.n_range
+            #self.sensors[first:last] = self.vision.ravel()
 
+            first = last
+            last = first + self.n_heading
+            self.sensors[first:last] = self.v_heading.ravel()
+            first = last
+            last = first + self.n_range
+            self.sensors[first:last] = self.v_range.ravel()
             #first = last
             #last = first + self.n_bump * self.n_range
             #self.sensors[first:last] = self.prox.ravel()
@@ -213,6 +232,8 @@ class World(BaseWorld):
             #self.range = np.zeros(self.n_range)
             #self.heading = np.zeros(self.n_heading)
             self.vision = np.zeros(self.vision.shape)
+            self.v_heading = np.zeros(self.v_heading.shape)
+            self.v_range = np.zeros(self.v_range.shape)
             self.prox = np.zeros(self.prox.shape)
             
         self.timestep += 1 
@@ -315,6 +336,8 @@ class World(BaseWorld):
         #self.heading[i_vision_heading] += 1. 
         self.vision = np.zeros(self.vision.shape)
         self.vision[i_vision_heading, i_vision_range] = 1.
+        self.v_heading[i_vision_heading] = 1.
+        self.v_range[i_vision_range] = 1.
         
         # ball bump detection
         # debug: don't penalize ball bumps
@@ -400,10 +423,16 @@ class World(BaseWorld):
         # contact with the robot
         f_bot_ball_x = -delta_bot_ball * k_bot_ball * np.cos(th_bot_ball)
         f_bot_ball_y = -delta_bot_ball * k_bot_ball * np.sin(th_bot_ball)
-        # friction and damping
+        # friction and damping, both proportional and Coulomb
         f_bot_vx = -self.vx_bot * self.c_bot
         f_bot_vy = -self.vy_bot * self.c_bot
         tau_bot_omega = -self.omega_bot * self.d_bot
+        #f_bot_vx = (-self.vx_bot * self.c_bot 
+        #            -np.sign(self.vx_bot) * self.cc_bot)
+        #f_bot_vy = (-self.vy_bot * self.c_bot
+        #            -np.sign(self.vx_bot) * self.cc_bot)
+        #tau_bot_omega = (-self.omega_bot * self.d_bot
+        #                 -np.sign(self.omega_bot) * self.dd_bot)
 
         # calculate total external forces
         f_ball_x = f_ball_E_x + f_ball_W_x + f_ball_bot_x + f_ball_vx
@@ -552,23 +581,27 @@ class World(BaseWorld):
             return
         print("world is %s seconds old " % self.clock_time)
         summary = np.sum(np.array(self.state_history), axis=0)
-        print '==='
-        first = 0
-        last = self.num_actions
-        print 'action', summary[first:last]
+        #print '==='
+        #first = 0
+        #last = self.num_actions
+        #print 'action', summary[first:last]
         #first = last
         #last = first + self.n_bump
         #print 'bumps', summary[first:last]
-        first = last
-        last = first + self.n_heading * self.n_range
-        print 'vision', np.reshape(summary[first:last], 
-                                   (self.n_heading, self.n_range))
+        #first = last
+        #last = first + self.n_heading * self.n_range
+        #print 'vision', np.reshape(summary[first:last], 
+        #                           (self.n_heading, self.n_range))
+        #first = last
+        #last = first + self.n_heading
+        #print 'vision_heading', summary[first:last] 
+        #first = last
+        #last = first + self.n_range
+        #print 'vision_range', summary[first:last] 
         #first = last
         #last = first + self.n_heading * self.n_range
         #print 'proximity', np.reshape(summary[first:last], 
         #                              (self.n_heading, self.n_range))
 
-        print 'reward', summary[-1]
-
-        self.render()
+        #print 'reward', summary[-1]
         return
