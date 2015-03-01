@@ -1,3 +1,10 @@
+"""
+a task in which a bug-looking robot chases a ball
+
+In this task, the robot's sensors inform it about the relative position
+of the ball, which changes often, but not about the absolute position 
+of the ball or about the robot's own absolute position.
+"""
 from matplotlib.path import Path
 import matplotlib.patches as patches
 import matplotlib.pyplot as plt
@@ -11,43 +18,91 @@ class World(BaseWorld):
     """ 
     ball-chasing bug robot world
     
+    In this two-dimensional world the robot can spin and move 
+    forward and backward. It can sense both how far away the 
+    ball is and in which direction. It gets a small reward for being
+    pointed toward the ball, a slightly larger reward for being nearer
+    the ball, and a large reward for 'catching' it--touching it with its
+    nose.
+
+    The physics in this world are intended to be those of the physical
+    world, at least to the depth of an introductoy mechanics class.
     """
     def __init__(self, lifespan=None):
-        """ Set up the world """
+        """ 
+        Set up the world 
+        """
         BaseWorld.__init__(self, lifespan)
-        self.CLOCKTICKS_PER_TIMESTEP = int(1000. / 4.)
-        self.TIMESTEPS_PER_FRAME = 100.#4. / 30.# 100. 
-        self.CLOCKTICKS_PER_FRAME = int(self.CLOCKTICKS_PER_TIMESTEP * 
-                                     self.TIMESTEPS_PER_FRAME)
-        self.name = 'chase'
-        #self.name = 'chase_no_bump'
-        #self.name = 'chase_no_bump_large'
-        #self.name = 'chase_small'
-        #self.bump_penalty = True
-        self.small = False
+        self.clockticks_per_timestep = int(1000. / 4.)
+        self.timesteps_per_frame = 100.#4. / 30.# 100. 
+        self.clockticks_per_frame = int(self.clockticks_per_timestep * 
+                                     self.timesteps_per_frame)
+        #self.name = 'chase'
+        self.name = 'chase_combined'
+        #self.name = 'chase_combined_no_attention'
+        #self.name = 'chase_combined_non_reduced'
+        #self.name = 'chase_combined_large_rew'
         self.name_long = 'ball chasing world'
         print "Entering", self.name_long
+        self.combined = True
+        self.reduced = True
+        self.small_actions = False
+        self.large_rewards = False
+        self.fine_heading = False
+        self.include_bump = False
+        self.include_prox = False
+        self.n_bump = 1
+        if self.fine_heading:
+            self.n_heading = 16
+        elif self.reduced:
+            self.n_heading = 6
+        else:
+            self.n_heading = 12
+        if self.reduced:
+            self.n_range = 4 
+        else:
+            #self.n_range = 7 
+            self.n_range = 12
+        self.n_prox = self.n_heading * self.n_range
         self._initialize_world()
-        #self.num_sensors = (self.n_bump + self.n_range + self.n_heading +
-        #                    self.n_bump * self.n_range)
-        #self.num_sensors = (self.n_range * self.n_heading)
-        self.num_sensors = (self.n_range + self.n_heading)
-        #self.num_sensors = (self.n_bump + self.n_range * self.n_heading +
-        #                    self.n_bump * self.n_range)
-        self.num_actions = 16
-        #self.num_actions = 12
+        if self.include_bump:
+            if self.include_prox:
+                self.num_sensors = (self.n_bump + self.n_range + 
+                                    self.n_heading + self.n_prox)
+            else:
+                self.num_sensors = (self.n_bump + self.n_range + 
+                                    self.n_heading)
+        else:
+            if self.include_prox:
+                self.num_sensors = (self.n_range + self.n_heading + 
+                                    self.n_prox)
+            else:
+                if self.combined:
+                    self.num_sensors = (self.n_range * self.n_heading)
+                else:
+                    self.num_sensors = (self.n_range + self.n_heading)
+        self.num_actions = 21
         self.action = np.zeros((self.num_actions,1))
-        self.CATCH_REWARD = .8
-        self.SEE_REWARD = .01
-        self.RANGE_REWARD = .002
-        self.BUMP_PENALTY = 0.#.01
-        self.state_history = []
+        if self.large_rewards:
+            self.CATCH_REWARD = .8
+            self.SEE_REWARD = .1
+            self.RANGE_REWARD = .02
+            self.BUMP_PENALTY = 0.#.0001
+        else:
+            self.CATCH_REWARD = .8
+            self.SEE_REWARD = 1e-4
+            self.RANGE_REWARD = 2e-5
+            self.BUMP_PENALTY = 0.#.0001
+        #self.state_history = []
         self.world_directory = 'becca_world_chase_ball'
         self.log_directory = os.path.join(self.world_directory, 'log')
         self.frames_directory = os.path.join(self.world_directory, 'frames') 
         self.frame_counter = 10000
 
     def _initialize_world(self):
+        """
+        Set up the phyics of the simulation
+        """
         self.clock_tick = 0.
         self.clock_time = 0.
         self.dt = .001 # seconds per clock tick
@@ -61,6 +116,7 @@ class World(BaseWorld):
         self.r_ball = .4 # meters
         self.k_ball = 3000. # Newtons / meter
         self.c_ball = 1. # Newton-seconds / meter
+        self.cc_ball = 1. # Newton
         self.m_ball = 1. # kilogram
         self.x_ball = 4. # meters
         self.y_ball = 4. # meters
@@ -89,35 +145,29 @@ class World(BaseWorld):
         self.alpha_bot = 0. # radians / second**2
 
         # detector parameters
-        if self.small:
-            self.n_bump = 6
-        else:
-            self.n_bump = 12
         self.bump = np.zeros(self.n_bump)
-        self.n_heading = 12
-        #self.heading = np.zeros(self.n_heading)
-        if self.small:
-            self.n_range = 3 
-            self.range_bins = self.r_bot * np.array([-1., .2, .8])
-        else:
-            self.n_range = 7 
+        if self.reduced:
             self.range_bins = self.r_bot * np.array([
-                    -1., .1, .2, .4, .8, 1.6, 3.2])
-        #self.range = np.zeros(self.n_range)
+                    -1., .2, .8, 2.2])
+        else:
+            self.range_bins = self.r_bot * np.array([
+                    -1., .1, .2, .4, .8, 1.2, 1.6, 2., 2.4, 2.8, 3.2, 3.6])
+            #self.range_bins = self.r_bot * np.array([
+            #        -1., .1, .2, .4, .8, 1.6, 3.2])
         self.vision = np.zeros((self.n_heading, self.n_range))
         self.v_heading = np.zeros(self.n_heading)
         self.v_range = np.zeros(self.n_range)
         self.vision_bins = np.copy(self.range_bins)
-        self.prox = np.zeros((self.n_bump, self.n_range))
+        self.prox = np.zeros((self.n_heading, self.n_range))
         self.prox_bins = np.copy(self.range_bins)
         self.n_catch = 0.
         self.n_see = 0.
         self.n_reach = 0.
 
-        # create a prototype force profile
+        # Create a prototype force profile.
         # It is a triangular profile, ramping linearly from 0 to peak over its
-        # first half, than ramping linearly back down to 0
-        duration = .25 # seconds
+        # first half, than ramping linearly back down to 0.
+        duration = .25
         peak = 1. # Newtons
         length = int(duration / self.dt)
         self.proto_force = np.ones(length)
@@ -134,130 +184,125 @@ class World(BaseWorld):
         self.f_y_buffer = np.zeros(buffer_length)
         self.tau_buffer = np.zeros(buffer_length)
 
-        self.drive_scale = 20.
-        self.spin_scale = 20.
-        #self.visualize()
-        return
+        if self.small_actions:
+            self.drive_scale = 5.
+            self.spin_scale = 5.
+        else:
+            self.drive_scale = 20.
+            self.spin_scale = 20.
 
     def step(self, action): 
-        """ Take one time step through the world """
+        """ 
+        Take one time step through the world 
+        """
 
         def convert_actions_to_drives(action):
             self.action = action
-            '''# Find the drive magnitude
-            self.drive = (  self.action[0] + 
-                        2 * self.action[1] + 
-                        4 * self.action[2] - 
-                            self.action[3] - 
-                        2 * self.action[4] - 
-                        4 * self.action[5])
-            # Find the spin magnitude
-            self.spin = (   self.action[6]  + 
-                        2 * self.action[7]  + 
-                        4 * self.action[8] - 
-                            self.action[9] - 
-                        2 * self.action[10] - 
-                        4 * self.action[11])
-            '''
             # Find the drive magnitude
             self.drive = (  self.action[0] + 
                         2 * self.action[1] + 
-                        3 * self.action[2] + 
-                        4 * self.action[3] - 
-                            self.action[4] - 
-                        2 * self.action[5] - 
-                        3 * self.action[6] - 
-                        4 * self.action[7])
+                        4 * self.action[2] + 
+                        8 * self.action[3] + 
+                        16 * self.action[4] - 
+                            self.action[5] - 
+                        2 * self.action[6] - 
+                        4 * self.action[7] -
+                        8 * self.action[8] -
+                        16 * self.action[9])
             # Find the spin magnitude
-            self.spin = (   self.action[8]  + 
-                        2 * self.action[9]  + 
-                        3 * self.action[10] + 
-                        4 * self.action[11] - 
-                            self.action[12] - 
-                        2 * self.action[13] - 
-                        3 * self.action[14] - 
-                        4 * self.action[15])
+            self.spin = (   self.action[10] + 
+                        2 * self.action[11] + 
+                        4 * self.action[12] + 
+                        8 * self.action[13] + 
+                        16 * self.action[14] - 
+                            self.action[15] - 
+                        2 * self.action[16] - 
+                        4 * self.action[17] -
+                        8 * self.action[18] -
+                        16 * self.action[19])
 
         def calculate_reward():
-            """ Assign reward based on the current state """
+            """ 
+            Assign reward based on accumulated target events over the 
+            previous time step
+            """
             self.reward = 0.
-            if self.n_catch:
-                self.reward += self.CATCH_REWARD
-            if self.n_see:
-                self.reward += self.SEE_REWARD
-            if self.n_reach:
-                self.reward += self.n_reach * self.RANGE_REWARD
-            if np.sum(self.bump) > 0.:
-                #bump_penalty:
-                self.reward -= self.BUMP_PENALTY
-                #self.reward -= np.sum(self.bump)
-            print self.reward, 'catch', self.n_catch, 'see', self.n_see ,'reach', self.n_reach
+            self.reward += self.n_catch * self.CATCH_REWARD
+            self.reward += self.n_see * self.SEE_REWARD
+            self.reward += self.n_reach * self.RANGE_REWARD
+
             self.n_catch = 0.
             self.n_see = 0.
             self.n_reach = 0.
         
         def convert_detectors_to_sensors():
+            """
+            Construct a sensor vector from the detector values
+            """
             self.sensors = np.zeros(self.num_sensors)
             last = 0
-            #first = last
-            #last = first + self.n_bump
-            #self.sensors[first:last] = self.bump
-            '''
-            self.sensors[self.n_bump:self.n_bump + self.n_range] = self.range
-            self.sensors[self.n_bump + self.n_range:
-                    self.n_bump + self.n_range + self.n_heading] = self.heading
-            self.sensors[self.n_bump + self.n_range + self.n_heading:
-                    self.n_bump + self.n_range + self.n_heading + 
-                    self.n_bump * self.n_range] = self.prox.ravel()
-            '''
-            #first = last
-            #last = first + self.n_heading * self.n_range
-            #self.sensors[first:last] = self.vision.ravel()
+            if self.include_bump:
+                first = last
+                last = first + self.n_bump
+                self.sensors[first:last] = self.bump
+            
+            if self.combined:
+                first = last
+                last = first + self.n_heading * self.n_range
+                self.sensors[first:last] = self.vision.ravel()
+            else:
+                first = last
+                last = first + self.n_heading
+                self.sensors[first:last] = self.v_heading.ravel()
 
-            first = last
-            last = first + self.n_heading
-            self.sensors[first:last] = self.v_heading.ravel()
-            first = last
-            last = first + self.n_range
-            self.sensors[first:last] = self.v_range.ravel()
-            #first = last
-            #last = first + self.n_bump * self.n_range
-            #self.sensors[first:last] = self.prox.ravel()
+                first = last
+                last = first + self.n_range
+                self.sensors[first:last] = self.v_range.ravel()
 
-            #print 'bump', self.bump.ravel()
-            #print 'vision', self.vision.ravel()
-            #print 'prox', self.prox.ravel()
+            if self.include_prox:
+                first = last
+                last = first + self.n_prox
+                self.sensors[first:last] = self.prox.ravel()
 
             self.bump = np.zeros(self.n_bump)
-            #self.range = np.zeros(self.n_range)
-            #self.heading = np.zeros(self.n_heading)
             self.vision = np.zeros(self.vision.shape)
             self.v_heading = np.zeros(self.v_heading.shape)
             self.v_range = np.zeros(self.v_range.shape)
             self.prox = np.zeros(self.prox.shape)
             
+        # Use the convenient internal methods defined above to 
+        # step the world forward at a high leve of abstraction.
         self.timestep += 1 
         convert_actions_to_drives(action)
-        for _ in range(self.CLOCKTICKS_PER_TIMESTEP):
+        for _ in range(self.clockticks_per_timestep):
             self.clock_step()
         calculate_reward()
         convert_detectors_to_sensors()
         full_state = np.concatenate((action.ravel(), 
                                      self.sensors.ravel(), 
                                      np.array([self.reward]) ))
-        self.state_history.append(full_state)
+        #self.state_history.append(full_state)
         return self.sensors, self.reward
 
     def clock_step(self):
+        """
+        Advance the phyisical simulation of the world by one clock tick.
+        This is at a much finer temporal granularity. 
+        """
         self.clock_tick += 1
         self.clock_time = self.clock_tick * self.dt
         
         def sector_index(n_sectors, theta):
-            """ For sector-based detectors, find the sector based on angle """
+            """ 
+            For sector-based detectors, find the sector based on angle 
+            """
             theta = np.mod(theta, 2 * np.pi)
             return int(np.floor(n_sectors * theta / (2 * np.pi)))
 
         def wall_range(theta):
+            """
+            Calculate the range to the nearest wall
+            """
             range = 1e10
             # find distance to West wall
             range_west = self.x_bot / (np.cos(np.pi - theta) + 1e-6)
@@ -340,12 +385,10 @@ class World(BaseWorld):
         self.v_range[i_vision_range] = 1.
         
         # ball bump detection
-        # debug: don't penalize ball bumps
-        if delta_bot_ball > 0.:
-            i_bump = sector_index(self.n_bump, th_bot_ball_rel)
-            #self.bump[i_bump] += delta_bot_ball 
-            self.bump[i_bump] += 0.
-            #print 'ball bump', i_bump, 
+        # debug: don't register ball bumps
+        #if delta_bot_ball > 0.:
+        #    i_bump = sector_index(self.n_bump, th_bot_ball_rel)
+        #    self.bump[i_bump] += delta_bot_ball 
 
         # calculate the forces on the ball
         # wall contact
@@ -367,8 +410,10 @@ class World(BaseWorld):
         f_ball_bot_x = delta_bot_ball * k_bot_ball * np.cos(th_bot_ball)
         f_ball_bot_y = delta_bot_ball * k_bot_ball * np.sin(th_bot_ball)
         # friction and damping
-        f_ball_vx = -self.vx_ball * self.c_ball
-        f_ball_vy = -self.vy_ball * self.c_ball
+        f_ball_vx = (-self.vx_ball * self.c_ball
+                     -np.sign(self.vx_ball) * self.cc_ball)
+        f_ball_vy = (-self.vy_ball * self.c_ball
+                     -np.sign(self.vy_ball) * self.cc_ball)
 
         # wall bump detection
         # Calculate the angle of contact relative to the robot's angle
@@ -379,38 +424,34 @@ class World(BaseWorld):
         if delta_bot_N > 0.:
             th_bot_N_rel = np.mod(self.th_bot - np.pi / 2., 2. * np.pi)
             i_bump = sector_index(self.n_bump, th_bot_N_rel)
-            #self.bump[i_bump] += delta_bot_N 
-            self.bump[i_bump]  = 1.
+            self.bump[i_bump] += delta_bot_N 
         delta_bot_S = self.r_bot - self.y_bot
         delta_bot_S = np.maximum(delta_bot_S, 0.)
         if delta_bot_S > 0.:
             th_bot_S_rel = np.mod(self.th_bot + np.pi / 2., 2. * np.pi)
             i_bump = sector_index(self.n_bump, th_bot_S_rel)
-            #self.bump[i_bump] += delta_bot_S
-            self.bump[i_bump]  = 1.
+            self.bump[i_bump] += delta_bot_S
         delta_bot_E = self.x_bot + self.r_bot - self.width
         delta_bot_E = np.maximum(delta_bot_E, 0.)
         if delta_bot_E > 0.:
             th_bot_E_rel = np.mod(self.th_bot, 2. * np.pi)
             i_bump = sector_index(self.n_bump, th_bot_E_rel)
-            #self.bump[i_bump] += delta_bot_E
-            self.bump[i_bump]  = 1.
+            self.bump[i_bump] += delta_bot_E
         delta_bot_W = self.r_bot - self.x_bot
         delta_bot_W = np.maximum(delta_bot_W, 0.)
         if delta_bot_W > 0.:
             th_bot_W_rel = np.mod(self.th_bot + np.pi, 2. * np.pi)
             i_bump = sector_index(self.n_bump, th_bot_W_rel)
-            #self.bump[i_bump] += delta_bot_W
-            self.bump[i_bump]  = 1.
+            self.bump[i_bump] += delta_bot_W
 
         # wall proximity detection
         # calculate the range detected by each proximity sensor
-        for (i_prox, prox_theta) in enumerate(
-                    np.arange(0., 2 * np.pi, 2 * np.pi / self.n_bump)):
-            range = wall_range(prox_theta + self.th_bot)
-            i_prox_range = np.where(range > self.range_bins)[0][-1]
-            self.prox[i_prox, i_prox_range] = 1.
-
+        if self.include_prox:
+            for (i_prox, prox_theta) in enumerate(
+                        np.arange(0., 2 * np.pi, 2 * np.pi / self.n_heading)):
+                range = wall_range(prox_theta + self.th_bot)
+                i_prox_range = np.where(range > self.prox_bins)[0][-1]
+                self.prox[i_prox, i_prox_range] = 1.
 
         # calculated the forces on the bot
         # wall contact
@@ -424,15 +465,15 @@ class World(BaseWorld):
         f_bot_ball_x = -delta_bot_ball * k_bot_ball * np.cos(th_bot_ball)
         f_bot_ball_y = -delta_bot_ball * k_bot_ball * np.sin(th_bot_ball)
         # friction and damping, both proportional and Coulomb
-        f_bot_vx = -self.vx_bot * self.c_bot
-        f_bot_vy = -self.vy_bot * self.c_bot
-        tau_bot_omega = -self.omega_bot * self.d_bot
-        #f_bot_vx = (-self.vx_bot * self.c_bot 
-        #            -np.sign(self.vx_bot) * self.cc_bot)
-        #f_bot_vy = (-self.vy_bot * self.c_bot
-        #            -np.sign(self.vx_bot) * self.cc_bot)
-        #tau_bot_omega = (-self.omega_bot * self.d_bot
-        #                 -np.sign(self.omega_bot) * self.dd_bot)
+        #f_bot_vx = -self.vx_bot * self.c_bot
+        #f_bot_vy = -self.vy_bot * self.c_bot
+        #tau_bot_omega = -self.omega_bot * self.d_bot
+        f_bot_vx = (-self.vx_bot * self.c_bot 
+                    -np.sign(self.vx_bot) * self.cc_bot)
+        f_bot_vy = (-self.vy_bot * self.c_bot
+                    -np.sign(self.vx_bot) * self.cc_bot)
+        tau_bot_omega = (-self.omega_bot * self.d_bot
+                         -np.sign(self.omega_bot) * self.dd_bot)
 
         # calculate total external forces
         f_ball_x = f_ball_E_x + f_ball_W_x + f_ball_bot_x + f_ball_vx
@@ -463,12 +504,13 @@ class World(BaseWorld):
 
         # check whether the bot caught the ball
         caught = False
-        if ((i_vision_heading == 0) | (i_vision_heading == self.n_heading - 1)):
-            self.n_see = 1.
+        if ((i_vision_heading == 0) | 
+            (i_vision_heading == self.n_heading - 1)):
+            self.n_see += 1.
             if i_vision_range == 0:
                 caught = True
 
-        self.n_reach = np.maximum(self.n_reach, float(6 - i_vision_range))
+        self.n_reach += float(self.n_range - 1 - i_vision_range)
 
         if caught:
             self.n_catch += 1.
@@ -488,16 +530,13 @@ class World(BaseWorld):
                 if delta_bot_ball < 0.:
                     good_location = True
                     
-        if (self.clock_tick % self.CLOCKTICKS_PER_FRAME) == 0:
-            #print
-            #print 'bump', self.bump.ravel()
-            #print 'vision', self.vision.ravel()
-            #print 'prox', self.prox.ravel()
+        if (self.clock_tick % self.clockticks_per_frame) == 0:
             self.render()
-        return
     
     def render(self): 
-    
+        """ 
+        Make a pretty picture of what's going on in the world 
+        """ 
         fig = plt.figure(num=83)
         fig.clf()
         fig, ax = plt.subplots(num=83, figsize=(self.width, self.depth))
@@ -562,46 +601,21 @@ class World(BaseWorld):
         # make sure the walls don't get clipped
         plt.ylim((-.1, self.depth + .1))
         plt.xlim((-.1, self.width + .1))
-        #fig.show()
         fig.canvas.draw()
         # Save the control panel image
-        filename =  self.name + '_' + str(self.frame_counter) + '.png'
+        filename = ''.join([self.name, '_', str(self.frame_counter),'.png'])
         full_filename = os.path.join(self.frames_directory, filename)
         self.frame_counter += 1
         dpi = 80 # for a resolution of 720 lines
         #dpi = 120 # for a resolution of 1080 lines
         plt.savefig(full_filename, format='png', dpi=dpi, 
                     facecolor=fig.get_facecolor(), edgecolor='none') 
-        #plt.show()
-        return
 
     def visualize(self, agent=None):
-        """ Show what's going on in the world """
-        if (self.timestep % self.TIMESTEPS_PER_FRAME) != 0:
+        """ 
+        Show what's going on in the world 
+        """
+        if (self.timestep % self.timesteps_per_frame) != 0:
             return
         print("world is %s seconds old " % self.clock_time)
-        summary = np.sum(np.array(self.state_history), axis=0)
-        #print '==='
-        #first = 0
-        #last = self.num_actions
-        #print 'action', summary[first:last]
-        #first = last
-        #last = first + self.n_bump
-        #print 'bumps', summary[first:last]
-        #first = last
-        #last = first + self.n_heading * self.n_range
-        #print 'vision', np.reshape(summary[first:last], 
-        #                           (self.n_heading, self.n_range))
-        #first = last
-        #last = first + self.n_heading
-        #print 'vision_heading', summary[first:last] 
-        #first = last
-        #last = first + self.n_range
-        #print 'vision_range', summary[first:last] 
-        #first = last
-        #last = first + self.n_heading * self.n_range
-        #print 'proximity', np.reshape(summary[first:last], 
-        #                              (self.n_heading, self.n_range))
-
-        #print 'reward', summary[-1]
-        return
+        #summary = np.sum(np.array(self.state_history), axis=0)
