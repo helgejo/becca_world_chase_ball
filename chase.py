@@ -34,35 +34,29 @@ class World(BaseWorld):
         """
         BaseWorld.__init__(self, lifespan)
         self.clockticks_per_timestep = int(1000. / 4.)
-        self.timesteps_per_frame = 100.#4. / 30.# 100. 
+        filming = False
+        if filming:
+            # Render the world for creating a 30 frame-per-second video
+            self.timesteps_per_frame = 4. / 30. 
+        else:
+            self.timesteps_per_frame = 100. 
         self.clockticks_per_frame = int(self.clockticks_per_timestep * 
                                      self.timesteps_per_frame)
         #self.name = 'chase'
-        self.name = 'chase_combined'
-        #self.name = 'chase_combined_no_attention'
-        #self.name = 'chase_combined_non_reduced'
-        #self.name = 'chase_combined_large_rew'
+        #self.name = 'chase_combined'
+        self.name = 'chase_combined_tf1'
         self.name_long = 'ball chasing world'
         print "Entering", self.name_long
         self.combined = True
-        self.reduced = True
-        self.small_actions = False
-        self.large_rewards = False
-        self.fine_heading = False
+        self.fine_heading = True
         self.include_bump = False
         self.include_prox = False
         self.n_bump = 1
         if self.fine_heading:
             self.n_heading = 16
-        elif self.reduced:
-            self.n_heading = 6
         else:
             self.n_heading = 12
-        if self.reduced:
-            self.n_range = 4 
-        else:
-            #self.n_range = 7 
-            self.n_range = 12
+        self.n_range = 12
         self.n_prox = self.n_heading * self.n_range
         self._initialize_world()
         if self.include_bump:
@@ -83,16 +77,10 @@ class World(BaseWorld):
                     self.num_sensors = (self.n_range + self.n_heading)
         self.num_actions = 21
         self.action = np.zeros((self.num_actions,1))
-        if self.large_rewards:
-            self.CATCH_REWARD = .8
-            self.SEE_REWARD = .1
-            self.RANGE_REWARD = .02
-            self.BUMP_PENALTY = 0.#.0001
-        else:
-            self.CATCH_REWARD = .8
-            self.SEE_REWARD = 1e-4
-            self.RANGE_REWARD = 2e-5
-            self.BUMP_PENALTY = 0.#.0001
+        self.CATCH_REWARD = .8
+        self.SEE_REWARD = 1e-5
+        self.RANGE_REWARD = 1e-6
+        self.BUMP_PENALTY = 0.#.0001
         #self.state_history = []
         self.world_directory = 'becca_world_chase_ball'
         self.log_directory = os.path.join(self.world_directory, 'log')
@@ -146,14 +134,8 @@ class World(BaseWorld):
 
         # detector parameters
         self.bump = np.zeros(self.n_bump)
-        if self.reduced:
-            self.range_bins = self.r_bot * np.array([
-                    -1., .2, .8, 2.2])
-        else:
-            self.range_bins = self.r_bot * np.array([
-                    -1., .1, .2, .4, .8, 1.2, 1.6, 2., 2.4, 2.8, 3.2, 3.6])
-            #self.range_bins = self.r_bot * np.array([
-            #        -1., .1, .2, .4, .8, 1.6, 3.2])
+        self.range_bins = self.r_bot * np.array([
+                -1., .1, .2, .4, .8, 1.2, 1.6, 2., 2.4, 2.8, 3.2, 3.6])
         self.vision = np.zeros((self.n_heading, self.n_range))
         self.v_heading = np.zeros(self.n_heading)
         self.v_range = np.zeros(self.n_range)
@@ -184,12 +166,8 @@ class World(BaseWorld):
         self.f_y_buffer = np.zeros(buffer_length)
         self.tau_buffer = np.zeros(buffer_length)
 
-        if self.small_actions:
-            self.drive_scale = 5.
-            self.spin_scale = 5.
-        else:
-            self.drive_scale = 20.
-            self.spin_scale = 20.
+        self.drive_scale = 20.
+        self.spin_scale = 20.
 
     def step(self, action): 
         """ 
@@ -566,8 +544,13 @@ class World(BaseWorld):
                                      linewidth=2., fill=False))
 
         # the robot
+        # Rixel color is gray (3b3b3b)
+        # eye color is light blue (c1e0ec)
+        robot_color = (59./255.,59./255.,59./255.)
+        eye_color = (193./255.,224./255.,236./255.)
         ax.add_patch(patches.Circle((self.x_bot, self. y_bot), 
-                                     self.r_bot, color=tools.COPPER))
+                                     self.r_bot, color=robot_color))
+                                     #self.r_bot, color=tools.COPPER))
         ax.add_patch(patches.Circle((self.x_bot, self. y_bot), 
                                      self.r_bot, 
                                      color=tools.COPPER_SHADOW, 
@@ -581,16 +564,31 @@ class World(BaseWorld):
                    self.r_bot * .25 * np.cos(self.th_bot - np.pi/2.))
         y_right = (self.y_bot + self.r_bot * .7 * np.sin(self.th_bot) + 
                   self.r_bot * .25 * np.sin(self.th_bot - np.pi/2.))
+        # pupil locations
+        xp_left = (self.x_bot + self.r_bot * .725 * np.cos(self.th_bot) + 
+                  self.r_bot * .248 * np.cos(self.th_bot + np.pi/2.))
+        yp_left = (self.y_bot + self.r_bot * .725 * np.sin(self.th_bot) + 
+                  self.r_bot * .248 * np.sin(self.th_bot + np.pi/2.))
+        xp_right = (self.x_bot + self.r_bot * .725 * np.cos(self.th_bot) + 
+                   self.r_bot * .248 * np.cos(self.th_bot - np.pi/2.))
+        yp_right = (self.y_bot + self.r_bot * .725 * np.sin(self.th_bot) + 
+                  self.r_bot * .248 * np.sin(self.th_bot - np.pi/2.))
         ax.add_patch(patches.Circle((x_left, y_left), 
                                      self.r_bot * .1, 
-                                     color=tools.DARK_COPPER))
+                                     color=eye_color))
+        ax.add_patch(patches.Circle((xp_left, yp_left), 
+                                     self.r_bot * .06, 
+                                     color=tools.COPPER_SHADOW))
         ax.add_patch(patches.Circle((x_left, y_left), 
                                      self.r_bot * .1, 
                                      color=tools.COPPER_SHADOW, 
                                      linewidth=1., fill=False))
         ax.add_patch(patches.Circle((x_right, y_right), 
                                      self.r_bot * .1, 
-                                     color=tools.DARK_COPPER))
+                                     color=eye_color))
+        ax.add_patch(patches.Circle((xp_right, yp_right), 
+                                     self.r_bot * .06, 
+                                     color=tools.COPPER_SHADOW))
         ax.add_patch(patches.Circle((x_right, y_right), 
                                      self.r_bot * .1, 
                                      color=tools.COPPER_SHADOW, 
