@@ -1,5 +1,5 @@
 """
-a task in which a bug-looking robot chases a ball
+A task in which a bug-looking robot chases a ball.
 
 In this task, the robot's sensors inform it about the relative position
 of the ball, which changes often, but not about the absolute position 
@@ -13,55 +13,70 @@ import os
 
 import core.tools as tools
 from worlds.base_world import World as BaseWorld
+import becca_world_chase_ball.clock_step as cs
 
 class World(BaseWorld):
     """ 
-    ball-chasing bug robot world
+    A ball-chasing dog robot world.
     
     In this two-dimensional world the robot can spin and move 
     forward and backward. It can sense both how far away the 
-    ball is and in which direction. It gets a small reward for being
-    pointed toward the ball, a slightly larger reward for being nearer
-    the ball, and a large reward for 'catching' it--touching it with its
-    nose.
+    ball is and in which direction. In order to succeed in this world,
+    the robot has to learn what to do for a given combination of
+    ball heading and ball range values.
 
     The physics in this world are intended to be those of the physical
-    world, at least to the depth of an introductoy mechanics class.
+    world, at least to the depth of an introductory mechanics class.
+
+    Attributes
+    ----------
+
     """
     def __init__(self, lifespan=None):
         """ 
-        Set up the world 
+        Set up the world.
+
+        Parameters
+        ----------
+        lifespan : int
+            The number of time steps during which the robot will try to
+            catch the ball. If None, it will be set to a default determined
+            by the ``BaseWorld`` class.
         """
         BaseWorld.__init__(self, lifespan)
-        timesteps_per_second = 10.
+        timesteps_per_second = 4.
         self.clockticks_per_timestep = int(1000. / timesteps_per_second)
         self.plot_feature_set = False
         filming = False
         if filming:
+            #self.timesteps_per_frame = 1
             # Render the world for creating a 30 frame-per-second video
             self.timesteps_per_frame = timesteps_per_second / 30. 
+            self.lifespan = 250
             # Don't plot features while filming
             self.plot_feature_set = False
         else:
-            self.timesteps_per_frame = 10000 
+            self.timesteps_per_frame = 1000 
         self.clockticks_per_frame = int(self.clockticks_per_timestep * 
                                         self.timesteps_per_frame)
-        #self.name = 'chase'
-        self.name = 'chase_explore_25'
+        self.clockticks_until_render = self.clockticks_per_frame
+        self.world_visualize_period = self.timesteps_per_frame
+        self.brain_visualize_period = 1e3
+        self.name = 'chase_26' 
         self.name_long = 'ball chasing world'
         print "Entering", self.name_long
-        self.n_bump_heading = 1#9
-        self.n_bump_mag = 2#5
-        self.n_ball_heading = 19
-        self.n_prox_heading = 2#11
-        self.n_ball_range = 15
-        self.n_prox_range = 1#7
+        self.n_bump_heading = 1
+        self.n_bump_mag = 3
+        self.n_ball_heading = 17
+        self.n_prox_heading = 2
+        self.n_ball_range = 11
+        self.n_prox_range = 1
         self.n_prox = self.n_prox_heading * self.n_prox_range
         self.n_bump = self.n_bump_heading * self.n_bump_mag
         # Must be odd
-        self.n_vel_per_axis = 9 
+        self.n_vel_per_axis = 3 
         # Must be odd
-        self.n_acc_per_axis = 5 
+        self.n_acc_per_axis = 1 
         self.n_vel = 3 * self.n_vel_per_axis
         self.n_acc = 3 * self.n_acc_per_axis
 
@@ -71,11 +86,10 @@ class World(BaseWorld):
                             self.n_vel + self.n_acc)
         self.num_actions = 20
         self.action = np.zeros((self.num_actions, 1))
-        self.CATCH_REWARD = .8
-        self.TOUCH_REWARD = 0.#.01
-        self.BUMP_PENALTY = 0.#.1
-        self.EFFORT_PENALTY = 0.#1e-4
-        #self.state_history = []
+        self.catch_reward = 1.
+        self.touch_reward = 1e-8
+        self.bump_penalty = 1e-2
+        self.effort_penalty = -1e-8
         self.world_directory = 'becca_world_chase_ball'
         self.log_directory = os.path.join(self.world_directory, 'log')
         self.frames_directory = os.path.join(self.world_directory, 'frames') 
@@ -83,15 +97,20 @@ class World(BaseWorld):
 
     def _initialize_world(self):
         """
-        Set up the phyics of the simulation
+        Set up the physics of the simulation.
         """
         self.clock_tick = 0.
+        self.tick_counter = 0
         self.clock_time = 0.
+
+        #-----------------
+        # This section of constants defines the dimensions and physics of 
+        # the ball chase world. These are also present in cs.clock_step()   
         self.dt = .001 # seconds per clock tick
 
         # wall parameters
-        self.width = 5.#9. # meters
-        self.depth = 5.#16. # meters
+        self.width = 5.#16 # meters
+        self.depth = 5.#9. # meters
         self.k_wall =  3000. # Newtons / meter
 
         # ball parameters
@@ -100,12 +119,7 @@ class World(BaseWorld):
         self.c_ball = 1. # Newton-seconds / meter
         self.cc_ball = 1. # Newton
         self.m_ball = 1. # kilogram
-        self.x_ball = 4. # meters
-        self.y_ball = 4. # meters
-        self.vx_ball = 0. # meters / second
-        self.vy_ball = 0. # meters / second
-        self.ax_ball = 0. # meters**2 / second
-        self.ay_ball = 0. # meters**2 / second
+        self.mouth_width_bot = np.pi / 3 # angle over which the bot can catch the ball
 
         # robot parameters
         self.r_bot = .8 # meters
@@ -116,6 +130,19 @@ class World(BaseWorld):
         self.dd_bot = 1. # Newton-meter
         self.m_bot = 5. # kilogram
         self.I_bot = 1. # kilogram-meters**2
+        #-------------------------
+
+        # state variables
+        # These continue to evolve. The are initialized here.
+        # ball state
+        self.x_ball = 4. # meters
+        self.y_ball = 4. # meters
+        self.vx_ball = 0. # meters / second
+        self.vy_ball = 0. # meters / second
+        self.ax_ball = 0. # meters**2 / second
+        self.ay_ball = 0. # meters**2 / second
+    
+        # bot state
         self.x_bot = 2. # meters
         self.y_bot = 2. # meters
         self.th_bot = np.pi / 4. # radians
@@ -125,7 +152,7 @@ class World(BaseWorld):
         self.ax_bot = 0. # meters**2 / second
         self.ay_bot = 0. # meters**2 / second
         self.alpha_bot = 0. # radians / second**2
-
+        
         # detector parameters
         min_vision_range = -1
         min_prox_range = -1.
@@ -143,18 +170,18 @@ class World(BaseWorld):
         Calculate radial bins that get wider as they move outward
         in a geometric sequence.
         """
-        def build_bins_one_sided(n, max_edge, min_edge=0.):
+        def build_bins_one_sided(n, max_edge, min_edge=-.01):
             """
             Build an array of bin edges from (near) zero to some positive value
             
             The array of bin edges produced will be of the form
-                [min_edge, a_1, a_2, a_3, ..., a_n-1]
+                [min_edge, 0, a_2, a_3, ..., a_n-1]
             where a_i form a geometric sequence to max_edge
                 a_i = max_edge * 2 ** i/n - 1 
             """
             bins = [min_edge]
             for i in range(n - 1):
-                fraction = float(i + 1) / n
+                fraction = float(i) / (n - 1)
                 bin_edge = max_edge * (2.** fraction - 1.)
                 bins.append(bin_edge)
             return np.array(bins)
@@ -177,7 +204,8 @@ class World(BaseWorld):
             where a_i form a geometric sequence to max_edge
                 a_i = max_edge * 2 ** i/(n+1) - 1 
             """
-            bins = [-tools.BIG]
+            #bins = [-tools.big]
+            bins = [-1e6]
             for i in range(n):
                 j = n - (i + 1)
                 fraction = float(j + 1) / (n + 1)
@@ -230,9 +258,6 @@ class World(BaseWorld):
         self.f_x_buffer = np.zeros(buffer_length)
         self.f_y_buffer = np.zeros(buffer_length)
         self.tau_buffer = np.zeros(buffer_length)
-
-        self.drive_scale = 8.
-        self.spin_scale = 8.
 
     def zero_sensors(self):
         self.bump = np.zeros(self.bump.shape)
@@ -349,26 +374,28 @@ class World(BaseWorld):
                 self.alpha_bot_sensor.shape)
 
     def list_detectors(self):
-        print 'self.bump'
-        print self.bump
-        print 'self.v_heading'
-        print self.v_heading
-        print 'self.v_range'
-        print self.v_range
-        print 'self.prox'
-        print self.prox
-        print 'self.v_fwd_bot_sensor'
-        print self.v_fwd_bot_sensor
-        print 'self.v_lat_bot_sensor'
-        print self.v_lat_bot_sensor
-        print 'self.omega_bot_sensor'
-        print self.omega_bot_sensor
-        print 'self.a_fwd_bot_sensor'
-        print self.a_fwd_bot_sensor
-        print 'self.a_lat_bot_sensor'
-        print self.a_lat_bot_sensor
-        print 'self.alpha_bot_sensor'
-        print self.alpha_bot_sensor
+        print
+        print '___________________________________'
+        print 'bump'
+        tools.format(self.bump)
+        print 'v_heading'
+        tools.format(self.v_heading)
+        print 'v_range'
+        tools.format(self.v_range)
+        print 'prox'
+        tools.format(self.prox)
+        print 'v_fwd_bot_sensor'
+        tools.format(self.v_fwd_bot_sensor)
+        print 'v_lat_bot_sensor'
+        tools.format(self.v_lat_bot_sensor)
+        print 'omega_bot_sensor'
+        tools.format(self.omega_bot_sensor)
+        print 'a_fwd_bot_sensor'
+        tools.format(self.a_fwd_bot_sensor)
+        print 'a_lat_bot_sensor'
+        tools.format(self.a_lat_bot_sensor)
+        print 'alpha_bot_sensor'
+        tools.format(self.alpha_bot_sensor)
 
     def step(self, action): 
         """ 
@@ -419,7 +446,8 @@ class World(BaseWorld):
                         2 * self.action[16] + 
                         4 * self.action[17] +
                         8 * self.action[18] +
-                        16 * self.action[19])[0]
+                        16 * self.action[19])
+
 
         def calculate_reward():
             """ 
@@ -427,12 +455,12 @@ class World(BaseWorld):
             previous time step
             """
             self.reward = 0.
-            self.reward += self.n_catch * self.CATCH_REWARD
+            self.reward += self.n_catch * self.catch_reward
             self.reward += (2 * np.sum(self.bump[:,0]) + 
-                            np.sum(self.bump[:,1])) * self.TOUCH_REWARD
+                            np.sum(self.bump[:,1])) * self.touch_reward
             self.reward -= (2 * np.sum(self.bump[:,-1]) + 
-                            np.sum(self.bump[:,-2])) * self.BUMP_PENALTY
-            self.reward -= self.effort * self.EFFORT_PENALTY
+                            np.sum(self.bump[:,-2])) * self.bump_penalty
+            self.reward -= self.effort * self.effort_penalty
 
             self.n_catch = 0.
         
@@ -440,313 +468,94 @@ class World(BaseWorld):
         # step the world forward at a high leve of abstraction.
         self.timestep += 1 
         convert_actions_to_drives(action)
-        for _ in range(self.clockticks_per_timestep):
-            self.clock_step()
+
+        # Call the high speed simulation code.
+        done = False
+        clockticks_remaining = self.clockticks_per_timestep
+        while not done:
+            # Check whether it's time to render the world.
+            if self.clockticks_until_render <= 0.: 
+                self.render()
+                self.clockticks_until_render = self.clockticks_per_frame
+
+            # The number of iterations limited by rendering.
+            if clockticks_remaining > self.clockticks_until_render:
+                n_clockticks = self.clockticks_until_render
+            # The number of iterations limited by the time step.
+            else:
+                n_clockticks = clockticks_remaining
+                done = True
+
+            self.clockticks_until_render -= n_clockticks
+            clockticks_remaining -= n_clockticks
+
+            (self.clock_tick, 
+            self.clock_time, 
+            self.n_catch,
+            self.x_ball,
+            self.y_ball,
+            self.vx_ball,
+            self.vy_ball,
+            self.ax_ball,
+            self.ay_ball,
+            self.x_bot,
+            self.y_bot,
+            self.th_bot,
+            self.vx_bot,
+            self.vy_bot,
+            self.omega_bot,
+            self.ax_bot,
+            self.ay_bot,
+            self.alpha_bot) = cs.clock_step(
+                    self.clock_tick, 
+                    self.clock_time, 
+                    n_clockticks,
+                    self.clockticks_per_timestep,
+                    self.ball_range_bins,
+                    self.prox_range_bins,
+                    self.bump_mag_bins,
+                    self.v_fwd_bins,
+                    self.v_lat_bins,
+                    self.omega_bins,
+                    self.a_fwd_bins,
+                    self.a_lat_bins,
+                    self.alpha_bins,
+                    self.v_heading,
+                    self.v_range,
+                    self.prox,
+                    self.bump,
+                    self.v_fwd_bot_sensor,
+                    self.v_lat_bot_sensor,
+                    self.omega_bot_sensor,
+                    self.a_fwd_bot_sensor,
+                    self.a_lat_bot_sensor,
+                    self.alpha_bot_sensor,
+                    self.n_catch,
+                    self.proto_force,
+                    self.f_x_buffer,
+                    self.f_y_buffer,
+                    self.tau_buffer,
+                    self.drive,
+                    self.spin,
+                    self.x_ball,
+                    self.y_ball,
+                    self.vx_ball,
+                    self.vy_ball,
+                    self.ax_ball,
+                    self.ay_ball,
+                    self.x_bot,
+                    self.y_bot,
+                    self.th_bot,
+                    self.vx_bot,
+                    self.vy_bot,
+                    self.omega_bot,
+                    self.ax_bot,
+                    self.ay_bot,
+                    self.alpha_bot)
+
         calculate_reward()
         self.convert_detectors_to_sensors()
         return self.sensors, self.reward
-
-    def clock_step(self):
-        """
-        Advance the phyisical simulation of the world by one clock tick.
-        This is at a much finer temporal granularity. 
-        """
-        self.clock_tick += 1
-        self.clock_time = self.clock_tick * self.dt
-        
-        def sector_index(n_sectors, theta):
-            """ 
-            For sector-based detectors, find the sector based on angle 
-            """
-            theta = np.mod(theta, 2 * np.pi)
-            return int(np.floor(n_sectors * theta / (2 * np.pi)))
-
-        def find_wall_range(theta):
-            """
-            Calculate the range to the nearest wall
-            """
-            wall_range = 1e10
-            # Find distance to West wall
-            range_west = self.x_bot / (np.cos(np.pi - theta) + 1e-6)
-            if range_west < 0.:
-                range_west = 1e10
-            range_west -= self.r_bot
-            wall_range = np.minimum(wall_range, range_west)
-            # Find distance to East wall
-            range_east = (self.width - self.x_bot) / (np.cos(theta) + 1e-6) 
-            if range_east < 0.:
-                range_east = 1e10
-            range_east -= self.r_bot
-            wall_range = np.minimum(wall_range, range_east)
-            # Find distance to South wall
-            range_south = self.y_bot / (np.sin(-theta) + 1e-6)
-            if range_south < 0.:
-                range_south = 1e10
-            range_south -= self.r_bot
-            wall_range = np.minimum(wall_range, range_south)
-            # Find distance to North wall
-            range_north = (self.depth - self.y_bot) / (np.sin(theta) + 1e-6)
-            if range_north < 0.:
-                range_north = 1e10
-            range_north -= self.r_bot
-            wall_range = np.minimum(wall_range, range_north)
-            return wall_range
-
-        # Add new force profiles to the buffers
-        if np.abs(self.drive) > 0.:
-            drive_x = self.drive * np.cos(self.th_bot)
-            drive_y = self.drive * np.sin(self.th_bot)
-            for proto_index in np.arange(self.proto_force.size):
-                tick  = self.clock_tick + proto_index
-                buffer_index = np.mod(tick, self.f_x_buffer.size)
-                self.f_x_buffer[buffer_index] += (
-                    self.proto_force[proto_index] * drive_x * self.drive_scale)
-                self.f_y_buffer[buffer_index] += (
-                    self.proto_force[proto_index] * drive_y * self.drive_scale)
-            self.drive = 0.
-
-        if np.abs(self.spin) > 0.:
-            for proto_index in np.arange(self.proto_force.size):
-                tick  = self.clock_tick + proto_index
-                buffer_index = np.mod(tick, self.tau_buffer.size)
-                self.tau_buffer[buffer_index] += (
-                    self.proto_force[proto_index] * self.spin * self.spin_scale)
-            self.spin = 0.
-
-        # grab next value from force buffers
-        buffer_index = np.mod(self.clock_tick, self.f_x_buffer.size)
-        f_x_drive = self.f_x_buffer[buffer_index]
-        f_y_drive = self.f_y_buffer[buffer_index]
-        tau_drive = self.tau_buffer[buffer_index]
-        self.f_x_buffer[buffer_index] = 0.
-        self.f_y_buffer[buffer_index] = 0.
-        self.tau_buffer[buffer_index] = 0.
-
-        # contact between the robot and the ball
-        delta_bot_ball = (self.r_ball + self.r_bot -
-                          ((self.x_ball - self.x_bot) ** 2 + 
-                           (self.y_ball - self.y_bot) ** 2) ** .5) 
-        dist_bot_ball = -delta_bot_ball
-        delta_bot_ball = np.maximum(delta_bot_ball, 0.)
-        th_bot_ball = np.arctan2(self.y_ball - self.y_bot,
-                                 self.x_ball - self.x_bot)
-        k_bot_ball = ((self.k_bot * self.k_ball) / 
-                      (self.k_bot + self.k_ball))
-        # ball range detection
-        self.i_vision_range = np.where(
-                dist_bot_ball > self.ball_range_bins)[0][-1] 
-        #self.range[self.i_vision_range] += 1.
-        # ball heading detection
-        # the angle of contact relative to the robot's angle
-        th_bot_ball_rel = np.mod(self.th_bot - th_bot_ball, 2. * np.pi)
-        self.i_vision_heading = sector_index(
-                self.n_ball_heading, th_bot_ball_rel)
-        #self.heading[self.i_vision_heading] += 1. 
-        #self.vision = np.zeros(self.vision.shape)
-        #self.vision[self.i_vision_heading, self.i_vision_range] = 1.
-        self.v_heading[self.i_vision_heading] += (1. /
-                                                  self.clockticks_per_timestep)
-        self.v_range[self.i_vision_range] += 1. / self.clockticks_per_timestep
-        
-        # ball bump detection
-        if delta_bot_ball > 0.:
-            i_bump_heading = sector_index(self.n_bump_heading, th_bot_ball_rel)
-            i_bump_mag  = np.where(delta_bot_ball > self.bump_mag_bins)[0][-1] 
-            self.bump[i_bump_heading, i_bump_mag] += (
-                    1. / self.clockticks_per_timestep)
-
-        # calculate the forces on the ball
-        # wall contact
-        delta_ball_N = self.y_ball + self.r_ball - self.depth
-        delta_ball_N = np.maximum(delta_ball_N, 0.)
-        delta_ball_S = self.r_ball - self.y_ball
-        delta_ball_S = np.maximum(delta_ball_S, 0.)
-        delta_ball_E = self.x_ball + self.r_ball - self.width
-        delta_ball_E = np.maximum(delta_ball_E, 0.)
-        delta_ball_W = self.r_ball - self.x_ball
-        delta_ball_W = np.maximum(delta_ball_W, 0.)
-        k_wall_ball = ((self.k_wall * self.k_ball) / 
-                       (self.k_wall + self.k_ball))
-        f_ball_N_y = -delta_ball_N * k_wall_ball 
-        f_ball_S_y =  delta_ball_S * k_wall_ball 
-        f_ball_E_x = -delta_ball_E * k_wall_ball 
-        f_ball_W_x =  delta_ball_W * k_wall_ball 
-        # contact with the robot
-        f_ball_bot_x = delta_bot_ball * k_bot_ball * np.cos(th_bot_ball)
-        f_ball_bot_y = delta_bot_ball * k_bot_ball * np.sin(th_bot_ball)
-        # friction and damping
-        f_ball_vx = (-self.vx_ball * self.c_ball
-                     -np.sign(self.vx_ball) * self.cc_ball)
-        f_ball_vy = (-self.vy_ball * self.c_ball
-                     -np.sign(self.vy_ball) * self.cc_ball)
-
-        # wall bump detection
-        # Calculate the angle of contact relative to the robot's angle
-        # for each of the walls. Assign the contact to the appropriate
-        # bump sensor.
-        delta_bot_N = self.y_bot + self.r_bot - self.depth
-        delta_bot_N = np.maximum(delta_bot_N, 0.)
-        if delta_bot_N > 0.:
-            th_bot_N_rel = np.mod(self.th_bot - np.pi / 2., 2. * np.pi)
-            #i_bump = sector_index(self.n_bump_heading, th_bot_N_rel)
-            #self.bump[i_bump] += delta_bot_N 
-
-            i_bump_heading = sector_index(self.n_bump_heading, th_bot_N_rel)
-            i_bump_mag  = np.where(delta_bot_N > self.bump_mag_bins)[0][-1] 
-            self.bump[i_bump_heading, i_bump_mag] += (
-                    1. / self.clockticks_per_timestep)
-
-        delta_bot_S = self.r_bot - self.y_bot
-        delta_bot_S = np.maximum(delta_bot_S, 0.)
-        if delta_bot_S > 0.:
-            th_bot_S_rel = np.mod(self.th_bot + np.pi / 2., 2. * np.pi)
-            #i_bump = sector_index(self.n_bump_heading, th_bot_S_rel)
-            #self.bump[i_bump] += delta_bot_S
-            i_bump_heading = sector_index(self.n_bump_heading, th_bot_S_rel)
-            i_bump_mag  = np.where(delta_bot_S > self.bump_mag_bins)[0][-1] 
-            self.bump[i_bump_heading, i_bump_mag] += (
-                    1. / self.clockticks_per_timestep)
-
-        delta_bot_E = self.x_bot + self.r_bot - self.width
-        delta_bot_E = np.maximum(delta_bot_E, 0.)
-        if delta_bot_E > 0.:
-            th_bot_E_rel = np.mod(self.th_bot, 2. * np.pi)
-            #i_bump = sector_index(self.n_bump_heading, th_bot_E_rel)
-            #self.bump[i_bump] += delta_bot_E
-            i_bump_heading = sector_index(self.n_bump_heading, th_bot_E_rel)
-            i_bump_mag  = np.where(delta_bot_E > self.bump_mag_bins)[0][-1] 
-            self.bump[i_bump_heading, i_bump_mag] += (
-                    1. / self.clockticks_per_timestep)
-
-        delta_bot_W = self.r_bot - self.x_bot
-        delta_bot_W = np.maximum(delta_bot_W, 0.)
-        if delta_bot_W > 0.:
-            th_bot_W_rel = np.mod(self.th_bot + np.pi, 2. * np.pi)
-            #i_bump = sector_index(self.n_bump_heading, th_bot_W_rel)
-            #self.bump[i_bump] += delta_bot_W
-            i_bump_heading = sector_index(self.n_bump_heading, th_bot_W_rel)
-            i_bump_mag  = np.where(delta_bot_W > self.bump_mag_bins)[0][-1] 
-            self.bump[i_bump_heading, i_bump_mag] += (
-                    1. / self.clockticks_per_timestep)
-
-        # wall proximity detection
-        # calculate the range detected by each proximity sensor
-        #if self.include_prox:
-        for (i_prox, prox_theta) in enumerate(
-                    np.arange(0., 2 * np.pi, 
-                              2 * np.pi / self.n_prox_heading)):
-
-            wall_range = find_wall_range(self.th_bot - prox_theta)
-            i_prox_range = np.where(wall_range > self.prox_range_bins)[0][-1]
-            self.prox[i_prox, i_prox_range] += (
-                    1. / self.clockticks_per_timestep)
-
-
-        # calculated the forces on the bot
-        # wall contact
-        k_wall_bot = ((self.k_wall * self.k_bot) / 
-                       (self.k_wall + self.k_bot))
-        f_bot_N_y = -delta_bot_N * k_wall_bot 
-        f_bot_S_y =  delta_bot_S * k_wall_bot 
-        f_bot_E_x = -delta_bot_E * k_wall_bot 
-        f_bot_W_x =  delta_bot_W * k_wall_bot 
-        # contact with the robot
-        f_bot_ball_x = -delta_bot_ball * k_bot_ball * np.cos(th_bot_ball)
-        f_bot_ball_y = -delta_bot_ball * k_bot_ball * np.sin(th_bot_ball)
-        # friction and damping, both proportional and Coulomb
-        #f_bot_vx = -self.vx_bot * self.c_bot
-        #f_bot_vy = -self.vy_bot * self.c_bot
-        #tau_bot_omega = -self.omega_bot * self.d_bot
-        f_bot_vx = (-self.vx_bot * self.c_bot 
-                    -np.sign(self.vx_bot) * self.cc_bot)
-        f_bot_vy = (-self.vy_bot * self.c_bot
-                    -np.sign(self.vx_bot) * self.cc_bot)
-        tau_bot_omega = (-self.omega_bot * self.d_bot
-                         -np.sign(self.omega_bot) * self.dd_bot)
-
-        # calculate total external forces
-        f_ball_x = f_ball_E_x + f_ball_W_x + f_ball_bot_x + f_ball_vx
-        f_ball_y = f_ball_N_y + f_ball_S_y + f_ball_bot_y + f_ball_vy
-        f_bot_x = f_bot_E_x + f_bot_W_x + f_bot_ball_x + f_bot_vx + f_x_drive
-        f_bot_y = f_bot_N_y + f_bot_S_y + f_bot_ball_y + f_bot_vy + f_y_drive
-        tau_bot = tau_bot_omega + tau_drive
-
-        # use forces to update accelerations, velocities, and positions
-        # ball
-        self.ax_ball = f_ball_x / self.m_ball
-        self.ay_ball = f_ball_y / self.m_ball
-        self.vx_ball += self.ax_ball * self.dt
-        self.vy_ball += self.ay_ball * self.dt
-        self.x_ball += self.vx_ball * self.dt
-        self.y_ball += self.vy_ball * self.dt
-        # robot
-        self.ax_bot = f_bot_x / self.m_bot
-        self.ay_bot = f_bot_y / self.m_bot
-        self.alpha_bot = tau_bot / self.I_bot
-        self.vx_bot += self.ax_bot * self.dt
-        self.vy_bot += self.ay_bot * self.dt
-        self.omega_bot+= self.alpha_bot * self.dt
-        self.x_bot += self.vx_bot * self.dt
-        self.y_bot += self.vy_bot * self.dt
-        self.th_bot += self.omega_bot * self.dt
-        self.th_bot = np.mod(self.th_bot, 2 * np.pi)
-        
-        # The robot's speed in the direction of its nose
-        self.v_fwd_bot = (self.vx_bot * np.cos(self.th_bot) +
-                          self.vy_bot * np.sin(self.th_bot) )
-        # The robot's sideways speed (right is positive)
-        self.v_lat_bot = (self.vx_bot * np.sin(self.th_bot) -
-                          self.vy_bot * np.cos(self.th_bot))
-        # The robot's speed in the direction of its nose
-        self.a_fwd_bot = (self.ax_bot * np.cos(self.th_bot) +
-                          self.ay_bot * np.sin(self.th_bot) )
-        # The robot's sideways speed (right is positive)
-        self.a_lat_bot = (self.ax_bot * np.sin(self.th_bot) -
-                          self.ay_bot * np.cos(self.th_bot))
-
-        i_v_fwd = np.where(self.v_fwd_bot > self.v_fwd_bins)[0][-1]
-        self.v_fwd_bot_sensor[i_v_fwd] += 1. / self.clockticks_per_timestep
-        i_v_lat = np.where(self.v_lat_bot > self.v_lat_bins)[0][-1]
-        self.v_lat_bot_sensor[i_v_lat] += 1. / self.clockticks_per_timestep
-        i_omega = np.where(self.omega_bot > self.omega_bins)[0][-1]
-        self.omega_bot_sensor[i_omega] += 1. / self.clockticks_per_timestep
-        i_a_fwd = np.where(self.a_fwd_bot > self.a_fwd_bins)[0][-1]
-        self.a_fwd_bot_sensor[i_a_fwd] += 1. / self.clockticks_per_timestep
-        i_a_lat = np.where(self.a_lat_bot > self.a_lat_bins)[0][-1]
-        self.a_lat_bot_sensor[i_a_lat] += 1. / self.clockticks_per_timestep
-        i_alpha = np.where(self.alpha_bot > self.alpha_bins)[0][-1]
-        self.alpha_bot_sensor[i_alpha] += 1. / self.clockticks_per_timestep
-
-        # check whether the bot caught the ball
-        caught = False
-        if ((self.i_vision_heading == 0) | 
-            (self.i_vision_heading == self.n_ball_heading - 1)):
-            #self.n_see += 1.
-            if self.i_vision_range == 0:
-                caught = True
-
-        #self.n_reach += float(self.n_range - 1 - self.i_vision_range)
-
-        if caught:
-            self.n_catch += 1.
-            # when caught, the ball jumps to a new location
-            good_location = False
-            while not good_location:
-                self.x_ball = self.r_ball + np.random.random_sample() * (
-                        self.width - 2 * self.r_ball)
-                self.y_ball = self.r_ball + np.random.random_sample() * (
-                        self.depth - 2 * self.r_ball)
-                self.vx_ball = np.random.normal()
-                self.vy_ball = np.random.normal()
-                # check that the ball doesn't splinch the robot
-                delta_bot_ball = (self.r_ball + self.r_bot -
-                                  ((self.x_ball - self.x_bot) ** 2 + 
-                                   (self.y_ball - self.y_bot) ** 2) ** .5) 
-                if delta_bot_ball < 0.:
-                    good_location = True
-                    
-        if (self.clock_tick % self.clockticks_per_frame) == 0:
-            self.render()
 
     def plot_robot(self, ax, x_bot, y_bot, th_bot, alpha=1., dzorder=0): 
         """
@@ -761,7 +570,7 @@ class World(BaseWorld):
                                      alpha=alpha, zorder=-dzorder))
         ax.add_patch(patches.Circle((x_bot, y_bot), 
                                      self.r_bot, 
-                                     color=tools.COPPER_SHADOW, 
+                                     color=tools.copper_shadow, 
                                      linewidth=2., fill=False,
                                      alpha=alpha, zorder=-dzorder))
         # robot eyes
@@ -788,11 +597,11 @@ class World(BaseWorld):
                                      alpha=alpha, zorder=-dzorder))
         ax.add_patch(patches.Circle((xp_left, yp_left), 
                                      self.r_bot * .06, 
-                                     color=tools.COPPER_SHADOW,
+                                     color=tools.copper_shadow,
                                      alpha=alpha, zorder=-dzorder))
         ax.add_patch(patches.Circle((x_left, y_left), 
                                      self.r_bot * .1, 
-                                     color=tools.COPPER_SHADOW, 
+                                     color=tools.copper_shadow, 
                                      linewidth=1., fill=False,
                                      alpha=alpha, zorder=-dzorder))
         ax.add_patch(patches.Circle((x_right, y_right), 
@@ -801,11 +610,11 @@ class World(BaseWorld):
                                      alpha=alpha, zorder=-dzorder))
         ax.add_patch(patches.Circle((xp_right, yp_right), 
                                      self.r_bot * .06, 
-                                     color=tools.COPPER_SHADOW,
+                                     color=tools.copper_shadow,
                                      alpha=alpha, zorder=-dzorder))
         ax.add_patch(patches.Circle((x_right, y_right), 
                                      self.r_bot * .1, 
-                                     color=tools.COPPER_SHADOW, 
+                                     color=tools.copper_shadow, 
                                      linewidth=1., fill=False,
                                      alpha=alpha, zorder=-dzorder))
 
@@ -820,9 +629,10 @@ class World(BaseWorld):
             magnitude = self.v_range[i_vision_range]
             i_range = np.minimum(i_vision_range + 1, self.n_ball_range - 1)  
             range_radius = self.r_bot + self.ball_range_bins[i_range]
+            alpha = np.minimum(1., magnitude * max_alpha) 
             ax.add_patch(patches.Circle((x_bot, y_bot), range_radius, 
-                                         color=tools.OXIDE, 
-                                         alpha=magnitude*max_alpha, 
+                                         color=tools.oxide, 
+                                         alpha=alpha, 
                                          linewidth=10., fill=False))
 
         # ball heading sensors
@@ -842,8 +652,8 @@ class World(BaseWorld):
                     np.sin(heading_sensor_angle_1) * heading_sensor_radius,
                     np.sin(heading_sensor_angle_2) * heading_sensor_radius,
                     0.])
-            ax.fill(x, y, color=tools.OXIDE, 
-                    alpha=magnitude*max_alpha, 
+            ax.fill(x, y, color=tools.oxide, 
+                    alpha=np.minimum(1., magnitude*max_alpha),
                     zorder=-1)
                                          
 
@@ -859,15 +669,16 @@ class World(BaseWorld):
                 x = x_bot + np.cos(prox_angle) * prox_range
                 y = y_bot + np.sin(prox_angle) * prox_range
                 prox_sensor_radius = self.r_bot / 10. 
+                alpha = np.minimum(1., magnitude * max_alpha) 
                 ax.add_patch(patches.Circle((x, y), prox_sensor_radius, 
-                                            color=tools.COPPER, 
-                                            alpha=magnitude*max_alpha,
+                                            color=tools.copper, 
+                                            alpha=alpha,
                                             linewidth=0., fill=True))
                 plt.plot([x_bot, x], [y_bot, y],
-                         color=tools.COPPER, linewidth=.5, 
-                         alpha=magnitude*max_alpha,
+                         color=tools.copper, linewidth=.5, 
+                         alpha=alpha,
                          zorder=-10)
-
+        
         # bump sensors
         max_alpha = .8
         for (i_bump, bump_theta) in enumerate(
@@ -881,21 +692,24 @@ class World(BaseWorld):
                 bump_sensor_radius = ((self.r_bot * i_mag) / 
                                       (2. * self.n_bump_mag))
                 bump_sensor_radius = np.maximum(0., bump_sensor_radius)
+                alpha = np.minimum(1., magnitude * max_alpha) 
                 ax.add_patch(patches.Circle(
-                        (x, y), bump_sensor_radius, color=tools.COPPER_SHADOW, 
-                        alpha=max_alpha*magnitude,
+                        (x, y), bump_sensor_radius, color=tools.copper_shadow, 
+                        alpha=alpha,
                         linewidth=0., fill=True))
+        
        
         # speed and acceleration sensors
         # TODO:
-        dx = .3
-        dy = .2
-        dth = .5
+        scale = .1
+        dx = self.vx_bot * scale
+        dy = self.vy_bot * scale
+        dth = self.omega_bot * scale
         self.plot_robot(ax, x_bot+dx, y_bot+dy, th_bot+dth, 
                         alpha=.3, dzorder=13)
-        ddx = .5
-        ddy = .4
-        ddth = .8
+        ddx = dx + self.ax_bot * scale ** 2
+        ddy = dy + self.ay_bot * scale ** 2
+        ddth = dth + self.alpha_bot * scale ** 2
         self.plot_robot(ax, x_bot+ddx, y_bot+ddy, th_bot+ddth, 
                         alpha=.15, dzorder=16)
 
@@ -911,25 +725,25 @@ class World(BaseWorld):
         # the walls
         plt.plot(np.array([0., self.width, self.width, 0., 0.]), 
                  np.array([0., 0., self.depth, self.depth, 0.]), 
-                 linewidth=10, color=tools.COPPER_SHADOW)
+                 linewidth=10, color=tools.copper_shadow)
         # the floor
         ax.fill([0., self.width, self.width, 0., 0.], 
                 [0., 0., self.depth, self.depth, 0.], 
-                color=tools.LIGHT_COPPER, zorder=-100)
+                color=tools.light_copper, zorder=-100)
         for x in np.arange(1., self.width):
             plt.plot(np.array([x, x]), np.array([0., self.depth]),
-                     linewidth=2, color=tools.COPPER_HIGHLIGHT,
+                     linewidth=2, color=tools.copper_highlight,
                      zorder=-99)
         for y in np.arange(1., self.depth):
             plt.plot(np.array([0., self.width]), np.array([y, y]),
-                     linewidth=2, color=tools.COPPER_HIGHLIGHT,
+                     linewidth=2, color=tools.copper_highlight,
                      zorder=-99)
         # the ball
         ax.add_patch(patches.Circle((self.x_ball, self. y_ball), 
-                                     self.r_ball, color=tools.OXIDE))
+                                     self.r_ball, color=tools.oxide))
         ax.add_patch(patches.Circle((self.x_ball, self. y_ball), 
                                      self.r_ball, 
-                                     color=tools.COPPER_SHADOW, 
+                                     color=tools.copper_shadow, 
                                      linewidth=2., fill=False))
 
         self.plot_robot(ax, self.x_bot, self.y_bot, self.th_bot) 
@@ -947,10 +761,11 @@ class World(BaseWorld):
         self.frame_counter += 1
         dpi = 80 # for a resolution of 720 lines
         #dpi = 120 # for a resolution of 1080 lines
+        facecolor = fig.get_facecolor()
         plt.savefig(full_filename, format='png', dpi=dpi, 
-                    facecolor=fig.get_facecolor(), edgecolor='none') 
+                    facecolor=facecolor, edgecolor='none') 
 
-    def visualize(self, agent=None):
+    def visualize_world(self, brain):
         """ 
         Show what's going on in the world 
         """
@@ -961,13 +776,15 @@ class World(BaseWorld):
 
         # Periodcally show the entire feature set 
         if self.plot_feature_set:
-            (feature_set, feature_activities) = agent.get_index_projections()
+            (feature_set, 
+             feature_activities) = brain.cortex.get_index_projections()
             num_blocks = len(feature_set)
             for block_index in range(num_blocks):
                 for feature_index in range(len(feature_set[block_index])):
                     projection = feature_set[block_index][feature_index] 
                     # Convert projection to sensor activities
-                    #print 'block_index', block_index, 'feature_index', feature_index 
+                    #print(' '.join(['block_index', str(block_index), 
+                    #                'feature_index', str(feature_index)])) 
                     self.convert_sensors_to_detectors(projection)
                                         
                     fig = plt.figure(num=99)
