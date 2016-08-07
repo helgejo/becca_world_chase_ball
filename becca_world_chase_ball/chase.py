@@ -1,19 +1,25 @@
 """
-A task in which a bug-looking robot chases a ball.
+A task in which a circular dog robot chases a ball.
 
 In this task, the robot's sensors inform it about the relative position
 of the ball, which changes often, but not about the absolute position 
-of the ball or about the robot's own absolute position.
+of the ball or about the robot's own absolute position. It is meant to
+be similar to robot tasks, where global information is often lacking.
+This task also requires a small amount of sequential planning, since
+catching the ball typically takes multiple actions.
 """
+import os
+
 from matplotlib.path import Path
 import matplotlib.patches as patches
 import matplotlib.pyplot as plt
 import numpy as np
-import os
 
-import core.tools as tools
-from worlds.base_world import World as BaseWorld
+import becca.connector
+from becca_test.base_world import World as BaseWorld
+import becca.tools as tools
 import becca_world_chase_ball.clock_step as cs
+
 
 class World(BaseWorld):
     """ 
@@ -27,10 +33,6 @@ class World(BaseWorld):
 
     The physics in this world are intended to be those of the physical
     world, at least to the depth of an introductory mechanics class.
-
-    Attributes
-    ----------
-
     """
     def __init__(self, lifespan=None):
         """ 
@@ -41,58 +43,118 @@ class World(BaseWorld):
         lifespan : int
             The number of time steps during which the robot will try to
             catch the ball. If None, it will be set to a default determined
-            by the ``BaseWorld`` class.
+            by the BaseWorld class.
         """
         BaseWorld.__init__(self, lifespan)
+        # How often time steps occur in simulated time. Four per second,
+        # or 250 milliseconds per timestep, is consistent with some
+        # observations of how often humans can make repetitive voluntary
+        # movements.
         timesteps_per_second = 4.
-        self.clockticks_per_timestep = int(1000. / timesteps_per_second)
+        # Clockticks are the finer-grained time step of the case world's
+        # physics simulation.
+        clockticks_per_second = 1000.
+        # clockticks_per_timestep : int
+        #     The number of phyics simulation time steps that occur
+        #     during one Becca time step.
+        self.clockticks_per_timestep = int(clockticks_per_second /
+                                           timesteps_per_second)
+        # plot_feature_set : boolean
+        #     Indicate whether to create a set of images, one for each
+        #     of the features that have been created.
         self.plot_feature_set = False
+        # During filming, create a series of still images. These can later
+        # be put together into a video.
+        # timesteps_per_frame : int
+        #     How often, in time steps, to render one frame.
         filming = False
         if filming:
-            #self.timesteps_per_frame = 1
             # Render the world for creating a 30 frame-per-second video
             self.timesteps_per_frame = timesteps_per_second / 30. 
+            # Shorten the lifespan so as not to fill the disk with images.
             self.lifespan = 250
             # Don't plot features while filming
             self.plot_feature_set = False
         else:
             self.timesteps_per_frame = 1000 
+        # clockticks_per_frame : int
+        #     How often, in physics simulation time steps, to render one frame.
         self.clockticks_per_frame = int(self.clockticks_per_timestep * 
                                         self.timesteps_per_frame)
+        # clockticks_until_render : int
+        #     A counter for how many clockticks are left until creating
+        #     the next frame.
         self.clockticks_until_render = self.clockticks_per_frame
+        # world_visualize_period : int
+        #     How often to put a picture of the world's state
+        #     on the screen. This is done
+        #     whenever an image is written to the disk.
         self.world_visualize_period = self.timesteps_per_frame
+        # brain_visualize_period : int
+        #     How often to put a picture of Becca's internal state
+        #     on the screen.
         self.brain_visualize_period = 1e3
-        self.name = 'chase_26' 
+        # name : str
+        #     A short descriptor of this world.
+        self.name = 'chase' 
+        # name_long : str
+        #     A more verbose descriptor of this world.
         self.name_long = 'ball chasing world'
         print "Entering", self.name_long
+
+        # The robot has several types of sensors: bump sensors, proximity
+        # detectors, primitive vision, velocity and acceleration.
+        # 
+        #  
         self.n_bump_heading = 1
+        #  
         self.n_bump_mag = 3
+        #  
         self.n_ball_heading = 17
+        #  
         self.n_prox_heading = 2
+        #  
         self.n_ball_range = 11
+        #  
         self.n_prox_range = 1
+        #  
         self.n_prox = self.n_prox_heading * self.n_prox_range
+        #  
         self.n_bump = self.n_bump_heading * self.n_bump_mag
         # Must be odd
         self.n_vel_per_axis = 3 
         # Must be odd
         self.n_acc_per_axis = 1 
+        #  
         self.n_vel = 3 * self.n_vel_per_axis
+        #  
         self.n_acc = 3 * self.n_acc_per_axis
 
+        #  
         self._initialize_world()
+        #  
         self.num_sensors = (self.n_ball_range + self.n_ball_heading + 
                             self.n_prox + self.n_bump + 
                             self.n_vel + self.n_acc)
+        #  
         self.num_actions = 20
+        #  
         self.action = np.zeros((self.num_actions, 1))
+        #  
         self.catch_reward = 1.
+        #  
         self.touch_reward = 1e-8
+        #  
         self.bump_penalty = 1e-2
+        #  
         self.effort_penalty = -1e-8
+        #  
         self.world_directory = 'becca_world_chase_ball'
+        #  
         self.log_directory = os.path.join(self.world_directory, 'log')
+        #  
         self.frames_directory = os.path.join(self.world_directory, 'frames') 
+        #  
         self.frame_counter = 10000
 
     def _initialize_world(self):
@@ -809,3 +871,5 @@ class World(BaseWorld):
                     plt.savefig(full_filename, format='png') 
 
 
+if __name__ == "__main__":
+    becca.connector.run(World())
