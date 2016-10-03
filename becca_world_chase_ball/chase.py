@@ -25,14 +25,17 @@ from __future__ import print_function
 import argparse
 import os
 
-import matplotlib.patches as patches
-import matplotlib.pyplot as plt
+#import matplotlib.patches as patches
+#import matplotlib.pyplot as plt
 import numpy as np
 
 import becca.connector
+from becca.base_world import World as BaseWorld
 import becca.tools as tools
-from becca_test.base_world import World as BaseWorld
+import becca_toolbox.ffmpeg_tools as vt
+#import becca_toolbox.feature_tools as ft
 import becca_world_chase_ball.clock_step as cs
+import becca_world_chase_ball.chase_viz as chase_viz
 
 
 class World(BaseWorld):
@@ -84,17 +87,24 @@ class World(BaseWorld):
         self.plot_feature_set = plot_feature_set
         # During filming, create a series of still images. These can later
         # be put together into a video.
-        # timesteps_per_frame : int
-        #     How often, in time steps, to render one frame.
-        if filming:
-            # Render the world for creating a 30 frame-per-second video
-            self.timesteps_per_frame = timesteps_per_second / 30.
+        # filming : boolean
+        #     An indicator of whether a movie is being created.
+        self.filming = filming
+        if self.filming:
+            # frames_per_second : float
+            #    The number of still frames to include in one-second of
+            #    rendered video of the world.
+            self.frames_per_second = 30.
+            # timesteps_per_frame : int
+            #     How often, in time steps, to render one frame.
+            self.timesteps_per_frame = (timesteps_per_second /
+                                        self.frames_per_second)
             # Shorten the lifespan so as not to fill the disk with images.
             self.lifespan = 250
             # Don't plot features while filming
             self.plot_feature_set = False
         else:
-            self.timesteps_per_frame = 1000
+            self.timesteps_per_frame = 1e4
         # clockticks_per_frame : int
         #     How often, in physics simulation time steps, to render one frame.
         self.clockticks_per_frame = int(self.clockticks_per_timestep *
@@ -109,8 +119,15 @@ class World(BaseWorld):
         self.brain_visualize_period = 1e3
         # name : str
         #     A short descriptor of this world.
-        self.name = 'chase'
-        self.name = 'chase_1' # Low-res vision
+        #self.name = 'chase'
+        #self.name = 'chase_1' # Low-res vision
+        #self.name = 'chase_2' # node_sequence_threshold 1e2
+        #self.name = 'chase_3' # node_sequence_threshold 3e2
+        #self.name = 'chase_4' # node_sequence_threshold 1e3
+        #self.name = 'chase_5' # node_sequence_threshold 1e3
+        #self.name = 'chase_6' # starting fresh
+        #self.name = 'chase_7' # minimal
+        self.name = 'chase_8' # 1e4 sequence threshold
         # name_long : str
         #     A more verbose descriptor of this world.
         self.name_long = 'ball chasing world'
@@ -131,7 +148,7 @@ class World(BaseWorld):
         self.n_bump_heading = 1
         # n_bump_mag : int
         #     How many distinct levels of bump pressure each sensor can detect.
-        self.n_bump_mag = 3
+        self.n_bump_mag = 1
         # In the robot's primitive vision, it can only distinguish
         # angular position (heading) and distance (range).
         # n_ball_heading : int
@@ -171,7 +188,7 @@ class World(BaseWorld):
         #     translation (x and y) and rotation (theta).
         #     This works best if it's odd, to leave one bin centered on
         #     zero velocity.
-        self.n_vel_per_axis = 3
+        self.n_vel_per_axis = 1
         if self.n_vel_per_axis % 2 == 0:
             self.n_vel_per_axis += 1
         # n_acc_per_axis
@@ -814,11 +831,11 @@ class World(BaseWorld):
             # Reward the bot for catching the ball.
             self.reward += self.n_catch * self.catch_reward
             # The bot also likes gentle contact.
-            self.reward += (2 * np.sum(self.bump[:, 0]) +
-                            np.sum(self.bump[:, 1])) * self.touch_reward
+            #self.reward += (2 * np.sum(self.bump[:, 0]) +
+            #                np.sum(self.bump[:, 1])) * self.touch_reward
             # It doesn't like violent contact.
-            self.reward -= (2 * np.sum(self.bump[:, -1]) +
-                            np.sum(self.bump[:, -2])) * self.bump_penalty
+            #self.reward -= (2 * np.sum(self.bump[:, -1]) +
+            #                np.sum(self.bump[:, -2])) * self.bump_penalty
             # And it is just a little bit lazy.
             self.reward -= self.effort * self.effort_penalty
 
@@ -835,7 +852,8 @@ class World(BaseWorld):
         while not done:
             # Check whether it's time to render the world.
             if self.clockticks_until_render <= 0.:
-                self.render()
+                #self.render()
+                chase_viz.render(self)
                 self.clockticks_until_render = self.clockticks_per_frame
 
             # The number of iterations limited by rendering.
@@ -848,7 +866,7 @@ class World(BaseWorld):
 
             self.clockticks_until_render -= n_clockticks
             clockticks_remaining -= n_clockticks
-  
+
             (self.clock_tick, self.clock_time,
              self.n_catch,
              self.x_ball, self.y_ball,
@@ -887,262 +905,35 @@ class World(BaseWorld):
         return self.sensors, self.reward
 
 
-    def plot_robot(self, axis, x_bot, y_bot, th_bot, alpha=1., dzorder=0):
-        """
-        Plot the robot and sensors in the current figure and axes.
-        """
-        # Rixel color is gray (3b3b3b)
-        # eye color is light blue (c1e0ec)
-        robot_color = (59./255., 59./255., 59./255.)
-        eye_color = (193./255., 224./255., 236./255.)
-        axis.add_patch(patches.Circle((x_bot, y_bot),
-                                      self.r_bot, color=robot_color,
-                                      alpha=alpha, zorder=-dzorder))
-        axis.add_patch(patches.Circle((x_bot, y_bot),
-                                      self.r_bot,
-                                      color=tools.copper_shadow,
-                                      linewidth=2., fill=False,
-                                      alpha=alpha, zorder=-dzorder))
-        # robot eyes
-        x_left = (x_bot + self.r_bot * .7 * np.cos(th_bot) +
-                  self.r_bot * .25 * np.cos(th_bot + np.pi/2.))
-        y_left = (y_bot + self.r_bot * .7 * np.sin(th_bot) +
-                  self.r_bot * .25 * np.sin(th_bot + np.pi/2.))
-        x_right = (x_bot + self.r_bot * .7 * np.cos(th_bot) +
-                   self.r_bot * .25 * np.cos(th_bot - np.pi/2.))
-        y_right = (y_bot + self.r_bot * .7 * np.sin(th_bot) +
-                   self.r_bot * .25 * np.sin(th_bot - np.pi/2.))
-        # pupil locations
-        xp_left = (x_bot + self.r_bot * .725 * np.cos(th_bot) +
-                   self.r_bot * .248 * np.cos(th_bot + np.pi/2.))
-        yp_left = (y_bot + self.r_bot * .725 * np.sin(th_bot) +
-                   self.r_bot * .248 * np.sin(th_bot + np.pi/2.))
-        xp_right = (x_bot + self.r_bot * .725 * np.cos(th_bot) +
-                    self.r_bot * .248 * np.cos(th_bot - np.pi/2.))
-        yp_right = (y_bot + self.r_bot * .725 * np.sin(th_bot) +
-                    self.r_bot * .248 * np.sin(th_bot - np.pi/2.))
-        axis.add_patch(patches.Circle((x_left, y_left),
-                                      self.r_bot * .1,
-                                      color=eye_color,
-                                      alpha=alpha, zorder=-dzorder))
-        axis.add_patch(patches.Circle((xp_left, yp_left),
-                                      self.r_bot * .06,
-                                      color=tools.copper_shadow,
-                                      alpha=alpha, zorder=-dzorder))
-        axis.add_patch(patches.Circle((x_left, y_left),
-                                      self.r_bot * .1,
-                                      color=tools.copper_shadow,
-                                      linewidth=1., fill=False,
-                                      alpha=alpha, zorder=-dzorder))
-        axis.add_patch(patches.Circle((x_right, y_right),
-                                      self.r_bot * .1,
-                                      color=eye_color,
-                                      alpha=alpha, zorder=-dzorder))
-        axis.add_patch(patches.Circle((xp_right, yp_right),
-                                      self.r_bot * .06,
-                                      color=tools.copper_shadow,
-                                      alpha=alpha, zorder=-dzorder))
-        axis.add_patch(patches.Circle((x_right, y_right),
-                                      self.r_bot * .1,
-                                      color=tools.copper_shadow,
-                                      linewidth=1., fill=False,
-                                      alpha=alpha, zorder=-dzorder))
-
-
-    def plot_sensors(self, axis, x_bot, y_bot, th_bot):
-        """
-        Visually represent what the sensors are detecting around the robot.
-        """
-        # Show sensors visually.
-        # ball range sensor
-        max_alpha = .3
-        for i_vision_range in np.nonzero(self.v_range)[0]:
-            magnitude = self.v_range[i_vision_range]
-            i_range = np.minimum(i_vision_range + 1, self.n_ball_range - 1)
-            range_radius = self.r_bot + self.ball_range_bins[i_range]
-            alpha = np.minimum(1., magnitude * max_alpha)
-            axis.add_patch(patches.Circle((x_bot, y_bot), range_radius,
-                                          color=tools.oxide,
-                                          alpha=alpha,
-                                          linewidth=10., fill=False))
-
-        # ball heading sensors
-        for i_vision_heading in np.nonzero(self.v_heading)[0]:
-            magnitude = self.v_heading[i_vision_heading]
-            heading_sensor_radius = self.width + self.depth
-            d_heading = 2. * np.pi / self.n_ball_heading
-            heading_sensor_angle_1 = th_bot - i_vision_heading * d_heading
-            heading_sensor_angle_2 = th_bot - (i_vision_heading + 1) * d_heading
-            x_pos = x_bot + np.array([
-                0.,
-                np.cos(heading_sensor_angle_1) * heading_sensor_radius,
-                np.cos(heading_sensor_angle_2) * heading_sensor_radius,
-                0.])
-            y_pos = y_bot + np.array([
-                0.,
-                np.sin(heading_sensor_angle_1) * heading_sensor_radius,
-                np.sin(heading_sensor_angle_2) * heading_sensor_radius,
-                0.])
-            axis.fill(x_pos, y_pos, color=tools.oxide,
-                      alpha=np.minimum(1., magnitude * max_alpha),
-                      zorder=-1)
-
-        # proximity sensors
-        for (i_prox, prox_theta) in enumerate(
-                np.arange(0., 2 * np.pi,
-                          2. * np.pi / self.n_prox_heading)):
-            for i_range in np.where(self.prox[i_prox, :] > 0)[0]:
-                magnitude = self.prox[i_prox, i_range]
-                i_prox_range = np.minimum(i_range, self.n_prox_range - 1)
-                prox_range = self.r_bot + self.prox_range_bins[i_prox_range]
-                prox_angle = th_bot - prox_theta
-                x_pos = x_bot + np.cos(prox_angle) * prox_range
-                y_pos = y_bot + np.sin(prox_angle) * prox_range
-                prox_sensor_radius = self.r_bot / 10.
-                alpha = np.minimum(1., magnitude * max_alpha)
-                axis.add_patch(patches.Circle((x_pos, y_pos), prox_sensor_radius,
-                                              color=tools.copper,
-                                              alpha=alpha,
-                                              linewidth=0., fill=True))
-                plt.plot([x_bot, x_pos], [y_bot, y_pos],
-                         color=tools.copper, linewidth=.5,
-                         alpha=alpha,
-                         zorder=-10)
-
-        # bump sensors
-        max_alpha = .8
-        for (i_bump, bump_theta) in enumerate(
-                np.arange(0., 2 * np.pi, 2 * np.pi / self.n_bump_heading)):
-            bump_angle = th_bot - bump_theta
-            x_pos = x_bot + np.cos(bump_angle) * self.r_bot
-            y_pos = y_bot + np.sin(bump_angle) * self.r_bot
-            for i_mag in np.where(self.bump[i_bump, :] > 0)[0]:
-                magnitude = np.minimum(1., self.bump[i_bump, i_mag])
-
-                bump_sensor_radius = ((self.r_bot * i_mag) /
-                                      (2. * self.n_bump_mag))
-                bump_sensor_radius = np.maximum(0., bump_sensor_radius)
-                alpha = np.minimum(1., magnitude * max_alpha)
-                axis.add_patch(patches.Circle(
-                    (x_pos, y_pos), bump_sensor_radius,
-                    color=tools.copper_shadow,
-                    alpha=alpha, linewidth=0., fill=True))
-
-
-        # speed and acceleration sensors
-        scale = .1
-        dx_pos = self.vx_bot * scale
-        dy_pos = self.vy_bot * scale
-        dth = self.omega_bot * scale
-        self.plot_robot(axis, x_bot + dx_pos, y_bot + dy_pos, th_bot + dth,
-                        alpha=.3, dzorder=13)
-        ddx_pos = dx_pos + self.ax_bot * scale ** 2
-        ddy_pos = dy_pos + self.ay_bot * scale ** 2
-        ddth = dth + self.alpha_bot * scale ** 2
-        self.plot_robot(axis, x_bot + ddx_pos, y_bot + ddy_pos, th_bot + ddth,
-                        alpha=.15, dzorder=16)
-
-
-    def render(self, dpi=80):
-        """
-        Make a pretty picture of what's going on in the world
-
-        Parameters
-        ----------
-        dpi : int
-            Dots per inch in the rendered image.
-            dpi = 80 for a resolution of 720 lines.
-            dpi = 120 for a resolution of 1080 lines.
-        """
-        fig = plt.figure(num=83)
-        fig.clf()
-        fig, axis = plt.subplots(num=83, figsize=(self.width, self.depth))
-
-        # The walls
-        plt.plot(np.array([0., self.width, self.width, 0., 0.]),
-                 np.array([0., 0., self.depth, self.depth, 0.]),
-                 linewidth=10, color=tools.copper_shadow)
-        # The floor
-        axis.fill([0., self.width, self.width, 0., 0.],
-                  [0., 0., self.depth, self.depth, 0.],
-                  color=tools.light_copper, zorder=-100)
-        for x_pos in np.arange(1., self.width):
-            plt.plot(np.array([x_pos, x_pos]), np.array([0., self.depth]),
-                     linewidth=2, color=tools.copper_highlight,
-                     zorder=-99)
-        for y_pos in np.arange(1., self.depth):
-            plt.plot(np.array([0., self.width]), np.array([y_pos, y_pos]),
-                     linewidth=2, color=tools.copper_highlight,
-                     zorder=-99)
-        # The ball
-        axis.add_patch(patches.Circle((self.x_ball, self. y_ball),
-                                      self.r_ball, color=tools.oxide))
-        axis.add_patch(patches.Circle((self.x_ball, self. y_ball),
-                                      self.r_ball,
-                                      color=tools.copper_shadow,
-                                      linewidth=2., fill=False))
-
-        self.plot_robot(axis, self.x_bot, self.y_bot, self.th_bot)
-        self.plot_sensors(axis, self.x_bot, self.y_bot, self.th_bot)
-
-        plt.axis('equal')
-        plt.axis('off')
-        # Make sure the walls don't get clipped.
-        plt.ylim((-.1, self.depth + .1))
-        plt.xlim((-.1, self.width + .1))
-        fig.canvas.draw()
-        # Save the image.
-        filename = ''.join([self.name, '_', str(self.frame_counter), '.png'])
-        full_filename = os.path.join(self.frames_directory, filename)
-        self.frame_counter += 1
-        facecolor = fig.get_facecolor()
-        plt.savefig(full_filename, format='png', dpi=dpi,
-                    facecolor=facecolor, edgecolor='none')
-
-
-    def visualize_world(self, brain):
+    def visualize(self, brain):
         """
         Show what's going on in the world.
         """
-        if (self.timestep % self.timesteps_per_frame) != 0:
-            return
-        timestr = tools.timestr(self.clock_time, s_per_step=1.)
-        print(' '.join(['world running for', timestr]))
+        chase_viz.visualize(self, brain)
 
-        # Periodcally show the entire feature set.
-        if self.plot_feature_set:
-            feature_set = brain.cortex.get_index_projections()[0]
-            num_blocks = len(feature_set)
-            for block_index in range(num_blocks):
-                for feature_index in range(len(feature_set[block_index])):
-                    projection = feature_set[block_index][feature_index]
-                    # Convert projection to sensor activities
-                    #print(' '.join(['block_index', str(block_index),
-                    #                'feature_index', str(feature_index)]))
-                    self.convert_sensors_to_detectors(projection)
 
-                    fig = plt.figure(num=99)
-                    fig.clf()
-                    fig, axis = plt.subplots(num=99, figsize=(3 * self.width,
-                                                              3 * self.depth))
-                    self.plot_robot(axis, 0., 0., np.pi/2)
-                    self.plot_sensors(axis, 0., 0., np.pi/2)
+    def close_world(self, brain):
+        """
+        Wrap up the world at the end of its lifetime.
 
-                    plt.axis('equal')
-                    plt.axis('off')
-                    plt.ylim((-self.depth, self.depth))
-                    plt.xlim((-self.width, self.width))
-                    fig.canvas.draw()
+        In this case, that means to take accumulated still images
+        and stitch them into a movie, if the filming option is active.
 
-                    filename = '_'.join(('block', str(block_index).zfill(2),
-                                         'feature', str(feature_index).zfill(4),
-                                         self.name, 'world.png'))
-                    #full_filename = os.path.join(self.module_path,
-                    #        'features', filename)
-                    full_filename = os.path.join(self.features_directory,
-                                                 filename)
-                    plt.title(filename)
-                    plt.savefig(full_filename, format='png')
+        Parameters
+        ----------
+        brain : Brain
+            The brain that lived in the world during its run.
+        """
+        if self.filming:
+            movie_filename = ''.join([self.name, '_',
+                                      str(brain.timestep), '.mp4'])
+            movie_full_filename = os.path.join(self.log_directory,
+                                               movie_filename)
+            print(movie_filename)
+            print(movie_full_filename)
+
+            vt.make_movie(self.frames_directory,
+                          movie_filename=movie_full_filename)
 
 
 if __name__ == "__main__":
@@ -1153,14 +944,18 @@ if __name__ == "__main__":
         help="Create picture of each of the features.")
     parser.add_argument(
         '-f', '--film', action='store_true',
-        help="Create picutres of the world at a video frame rate.")
+        help="Create pictures of the world at a video frame rate.")
     args = parser.parse_args()
 
     filming_flag = bool(args.film)
     plot_features = bool(args.plot)
 
     default_lifespan = 1e8
-    becca.connector.run(World(plot_feature_set=plot_features,
-                              lifespan=default_lifespan,
-                              filming=filming_flag),
-                              restore=True)
+    if filming_flag:
+        becca.connector.run(World(plot_feature_set=False, filming=True),
+                            restore=True)
+    else:
+        becca.connector.run(World(plot_feature_set=plot_features,
+                                  lifespan=default_lifespan,
+                                  filming=False),
+                            restore=True)
