@@ -33,7 +33,6 @@ import becca.connector
 from becca.base_world import World as BaseWorld
 import becca.tools as tools
 import becca_toolbox.ffmpeg_tools as vt
-#import becca_toolbox.feature_tools as ft
 import becca_world_chase_ball.clock_step as cs
 import becca_world_chase_ball.chase_viz as chase_viz
 
@@ -68,19 +67,22 @@ class World(BaseWorld):
             world at a video frame rate.
         """
         BaseWorld.__init__(self, lifespan)
+        # Keep control over when rendering and visualization occurs.
+        self.visualize_interval = 1e20
+        self.brain_visualize_interval = int(1e5)
         # How often time steps occur in simulated time. Four per second,
         # or 250 milliseconds per timestep, is consistent with some
         # observations of how often humans can make repetitive voluntary
         # movements.
-        timesteps_per_second = 4.
+        timesteps_per_second = 1.
         # Clockticks are the finer-grained time step of the case world's
         # physics simulation.
         clockticks_per_second = 1000.
         # clockticks_per_timestep : int
         #     The number of phyics simulation time steps that occur
         #     during one Becca time step.
-        self.clockticks_per_timestep = int(clockticks_per_second /
-                                           timesteps_per_second)
+        self.clockticks_per_timestep = int(
+            clockticks_per_second / timesteps_per_second)
         # plot_feature_set : boolean
         #     Indicate whether to create a set of images, one for each
         #     of the features that have been created.
@@ -92,42 +94,71 @@ class World(BaseWorld):
         self.filming = filming
         if self.filming:
             # frames_per_second : float
-            #    The number of still frames to include in one-second of
-            #    rendered video of the world.
+            #     The number of still frames to include in one-second of
+            #     rendered video of the world.
             self.frames_per_second = 30.
             # timesteps_per_frame : int
             #     How often, in time steps, to render one frame.
-            self.timesteps_per_frame = (timesteps_per_second /
-                                        self.frames_per_second)
-            # Shorten the lifespan so as not to fill the disk with images.
-            self.lifespan = 250
+            self.timesteps_per_frame = (
+                timesteps_per_second / self.frames_per_second)
+            # Create just enough frames for a 60-second video.
+            self.lifespan = int(30 * timesteps_per_second)
             # Don't plot features while filming
             self.plot_feature_set = False
         else:
             self.timesteps_per_frame = 1e4
         # clockticks_per_frame : int
         #     How often, in physics simulation time steps, to render one frame.
-        self.clockticks_per_frame = int(self.clockticks_per_timestep *
-                                        self.timesteps_per_frame)
+        self.clockticks_per_frame = int(
+            self.clockticks_per_timestep * self.timesteps_per_frame)
         # clockticks_until_render : int
         #     A counter for how many clockticks are left until creating
         #     the next frame.
         self.clockticks_until_render = self.clockticks_per_frame
-        # brain_visualize_period : int
-        #     How often to put a picture of Becca's internal state
-        #     on the screen.
-        self.brain_visualize_period = 1e3
         # name : str
         #     A short descriptor of this world.
-        #self.name = 'chase'
-        #self.name = 'chase_1' # Low-res vision
-        #self.name = 'chase_2' # node_sequence_threshold 1e2
-        #self.name = 'chase_3' # node_sequence_threshold 3e2
-        #self.name = 'chase_4' # node_sequence_threshold 1e3
-        #self.name = 'chase_5' # node_sequence_threshold 1e3
-        #self.name = 'chase_6' # starting fresh
-        #self.name = 'chase_7' # minimal
-        self.name = 'chase_8' # 1e4 sequence threshold
+        #self.name = 'chase_8' # Starting fresh, .06
+        #self.name = 'chase_0' # n_prox_heading=7, n_prox_range=3,
+        #self.name = 'chase_1' # vel_per_axis=3, acc_per_axis=3
+        #self.name = 'chase_2' # chase_8 with n_ball_heading=15
+        #self.name = 'chase_3' # chase_2 with n_ball_range=7
+        #self.name = 'chase_4' # chase_3 with timesteps_per_second=1
+        #self.name = 'chase_5' # chase_8 with timesteps_per_second=1,
+        #                      # n_ball_heading=7, n_ball_range=3
+        #self.name = 'chase_6' # chase_5 with n_ball_heading=11
+        #self.name = 'chase_7' # chase_6 with n_ball_heading=5, n_ball_range=2
+        #self.name = 'chase_9' # chase_5 with n_ball_heading=9, n_ball_range=7
+        #self.name = 'chase_10' # test
+        #self.name = 'chase_11' # test
+        #self.name = 'chase_12' # test
+        #self.name = 'chase_13' # test
+        #self.name = 'chase_14' # 2x friction
+        #self.name = 'chase_15' # 4x friction
+        #self.name = 'chase_16' # .35 model.prefix_decay_rate
+        #self.name = 'chase_17' # .25 model.prefix_decay_rate
+        #self.name = 'chase_18' # .35 model.prefix_decay_rate, 2x features
+        #self.name = 'chase_19' # .15 model.prefix_decay_rate
+        #self.name = 'chase_20' # .1 model.prefix_decay_rate
+        #self.name = 'chase_21' # .1 model.prefix_decay_rate, 2x features
+        #self.name = 'chase_22' # .2 model.prefix_decay_rate, 2x features
+        #self.name = 'chase_23' # .2 model.prefix_decay_rate
+        #self.name = 'chase_24' # 2 steps per second, drive_scale=30
+        #self.name = 'chase_25' # n_ball_heading=15
+        #self.name = 'chase_26' # 4 steps per second
+        #self.name = 'chase_27' # 2 steps per second, drive_scale=10
+        #self.name = 'chase_28' # 4x features
+        #self.name = 'chase_29' # n_ball_heading=21
+        #self.name = 'chase_30' # n_heading=15, double spin drive scale (.08)
+        #self.name = 'chase_31' # 1 step per second (.14)
+        #self.name = 'chase_32' # 8x features
+        #self.name = 'chase_33' # fixed features (.15)
+        #self.name = 'chase_34' # n_ball_range=4 (.16)
+        #self.name = 'chase_35' # n_ball_range=4, n_ball_heading=9 (.14)
+        #self.name = 'chase_36' # n_ball_range=4, n_ball_heading=24 (.16)
+        #self.name = 'chase_37' # n_ball_range=4, n_ball_heading=36 (.16)
+        #self.name = 'chase_38' # n_ball_range=4, n_ball_heading=50 (.14)
+        self.name = 'chase_39' # n_ball_range=4, n_ball_heading=24 (.16)
+
         # name_long : str
         #     A more verbose descriptor of this world.
         self.name_long = 'ball chasing world'
@@ -157,11 +188,11 @@ class World(BaseWorld):
         #     the bump sensor bins: equal sized divisions of 360 degrees,
         #     starting between the robots eyes and extending clockwise
         #     to surround the robot.
-        self.n_ball_heading = 9
+        self.n_ball_heading = 24
         # n_ball_range : int
         #     The number of distinct bins that the ball distance can fall
         #     into.
-        self.n_ball_range = 4
+        self.n_ball_range = 7
         # Proximity sensors feel how far away the wall is in several different
         # directions. They don't sense the ball.
         # n_prox_heading : int
@@ -209,9 +240,13 @@ class World(BaseWorld):
         # num_sensors : int
         #     The total number of sensors that the chase world will
         #     be passing back to Becca.
-        self.num_sensors = (self.n_ball_range + self.n_ball_heading +
-                            self.n_prox + self.n_bump +
-                            self.n_vel + self.n_acc)
+        self.num_sensors = (
+            self.n_ball_range +
+            self.n_ball_heading)# +
+            #self.n_prox +
+            #self.n_bump +
+            #self.n_vel +
+            #self.n_acc)
         # num_actions : int
         #     The total number of actions that can be taken in
         #     the chase world.
@@ -631,10 +666,11 @@ class World(BaseWorld):
         self.sensors = np.zeros(self.num_sensors)
         last = 0
 
+        '''
         first = last
         last = first + self.n_bump
         self.sensors[first:last] = self.bump.ravel()
-
+        '''
         first = last
         last = first + self.n_ball_heading
         self.sensors[first:last] = self.v_heading.ravel()
@@ -642,7 +678,7 @@ class World(BaseWorld):
         first = last
         last = first + self.n_ball_range
         self.sensors[first:last] = self.v_range.ravel()
-
+        '''
         first = last
         last = first + self.n_prox
         self.sensors[first:last] = self.prox.ravel()
@@ -670,13 +706,13 @@ class World(BaseWorld):
         first = last
         last = first + self.n_acc_per_axis
         self.sensors[first:last] = self.alpha_bot_sensor.ravel()
-
+        '''
         self.zero_sensors()
 
 
     def convert_sensors_to_detectors(self, sensors):
         """
-        Construct a sensor vector from the detector values.
+        Construct detector values from a sensor vector.
 
         This is the inverse operation of convert_detectors_to_sensors.
         For a given array of self.sensor values, break it out into
@@ -685,10 +721,11 @@ class World(BaseWorld):
         self.zero_sensors()
 
         last = 0
+        '''
         first = last
         last = first + self.n_bump
         self.bump = sensors[first:last].reshape(self.bump.shape)
-
+        '''
         first = last
         last = first + self.n_ball_heading
         self.v_heading = sensors[first:last].reshape(self.v_heading.shape)
@@ -696,7 +733,7 @@ class World(BaseWorld):
         first = last
         last = first + self.n_ball_range
         self.v_range = sensors[first:last].reshape(self.v_range.shape)
-
+        '''
         first = last
         last = first + self.n_prox
         self.prox = sensors[first:last].reshape(self.prox.shape)
@@ -730,7 +767,7 @@ class World(BaseWorld):
         last = first + self.n_acc_per_axis
         self.alpha_bot_sensor = sensors[first:last].reshape(
             self.alpha_bot_sensor.shape)
-
+        '''
 
     def list_detectors(self):
         """
@@ -852,7 +889,6 @@ class World(BaseWorld):
         while not done:
             # Check whether it's time to render the world.
             if self.clockticks_until_render <= 0.:
-                #self.render()
                 chase_viz.render(self)
                 self.clockticks_until_render = self.clockticks_per_frame
 
@@ -874,7 +910,8 @@ class World(BaseWorld):
              self.ax_ball, self.ay_ball,
              self.x_bot, self.y_bot, self.th_bot,
              self.vx_bot, self.vy_bot, self.omega_bot,
-             self.ax_bot, self.ay_bot, self.alpha_bot
+             self.ax_bot, self.ay_bot, self.alpha_bot,
+             self.drive, self.spin
             ) = cs.clock_step(
                 self.clock_tick, self.clock_time,
                 n_clockticks, self.clockticks_per_timestep,
@@ -910,6 +947,13 @@ class World(BaseWorld):
         Show what's going on in the world.
         """
         chase_viz.visualize(self, brain)
+
+
+    def render_sensors_actions(self, sensors, actions):
+        """
+        Create a plot in the current axis showing sensors and actions.
+        """
+        chase_viz.render_sensors_actions(self, sensors, actions)
 
 
     def close_world(self, brain):

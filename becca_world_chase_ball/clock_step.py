@@ -149,8 +149,8 @@ def clock_step(
     pi = 3.1415922
 
     # Constants
-    drive_scale = 3.
-    spin_scale = 3.
+    drive_scale = 20.
+    spin_scale = 20.
 
     #-----------------------
     # This section of constants defines the dimensions and physics of
@@ -409,12 +409,12 @@ def clock_step(
                     good_location = True
 
     return(
-           clock_tick, clock_time,
-           n_catch,
-           x_ball, y_ball,
-           vx_ball, vy_ball,
-           ax_ball, ay_ball,
-           x_bot, y_bot, th_bot,
-           vx_bot, vy_bot, omega_bot,
-           ax_bot, ay_bot, alpha_bot
-           )
+        clock_tick, clock_time,
+        n_catch,
+        x_ball, y_ball,
+        vx_ball, vy_ball,
+        ax_ball, ay_ball,
+        x_bot, y_bot, th_bot,
+        vx_bot, vy_bot, omega_bot,
+        ax_bot, ay_bot, alpha_bot,
+        drive, spin)
